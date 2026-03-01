@@ -3,62 +3,124 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>カンジクエスト レトロ</title>
+  <title>カンジノート</title>
   
   <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            terracotta: '#E07A5F',
+            sage: '#81B29A',
+            bluegrey: '#3D405B',
+            cream: '#F4F1DE',
+            mustard: '#F2CC8F',
+          },
+          fontFamily: {
+            rounded: ['"M PLUS Rounded 1c"', 'sans-serif'],
+            kyokasho: ['"UD Digi Kyokasho N-B"', '"UD デジタル 教科書体 N-B"', '"Klee One"', 'serif'],
+          }
+        }
+      }
+    }
+  </script>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Klee+One:wght@600&display=swap" rel="stylesheet">
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="icon" href="favicon.png">
+  <link href="https://fonts.googleapis.com/css2?family=Klee+One:wght@600&family=M+PLUS+Rounded+1c:wght@500;700&display=swap" rel="stylesheet">
   
   <style>
-    :root {
-      --sfc-gray-light: #D8D8D8;
-      --sfc-gray-dark: #888888;
-      --sfc-red: #E4000F;
-      --sfc-yellow: #F1E100;
-      --sfc-blue: #0033A6;
-      --sfc-green: #009B48;
-      --tv-bg: #2C3E50;
-    }
-    
     body {
       margin: 0;
       overflow: hidden;
-      background-color: var(--sfc-gray-light);
       touch-action: manipulation;
       user-select: none;
       height: 100dvh; 
       width: 100vw;
     }
+    
     #root {
       height: 100%;
       width: 100%;
     }
 
-    .font-pixel { font-family: 'DotGothic16', sans-serif; }
-    .font-kyokasho { font-family: 'UD Digi Kyokasho N-B', 'UD デジタル 教科書体 N-B', 'Klee One', serif; }
-
-    @keyframes insertCartridge {
-      0% { transform: translateY(-120vh) scale(1.2); }
-      50% { transform: translateY(0) scale(1.2); }
-      75% { transform: translateY(-20px) scale(1.2); }
-      100% { transform: translateY(0) scale(1.2); }
+    /* コルクボード風背景 */
+    .bg-cork {
+      background-color: #d0a57b;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.15'/%3E%3C/svg%3E");
     }
-    .animate-insert { animation: insertCartridge 0.8s cubic-bezier(0.25, 1, 0.5, 1) forwards; }
 
-    @keyframes tvFlash {
-      0% { opacity: 0; background-color: #000; }
-      10% { opacity: 1; background-color: #FFF; }
-      100% { opacity: 1; background-color: transparent; }
+    /* 紙の質感背景 */
+    .bg-paper {
+      background-color: #F4F1DE;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.05'/%3E%3C/svg%3E");
     }
-    .animate-tv-on { animation: tvFlash 0.6s ease-out forwards; }
+
+    /* マスキングテープ装飾 */
+    .masking-tape {
+      position: absolute;
+      top: -12px;
+      left: 50%;
+      transform: translateX(-50%) rotate(-2deg);
+      width: 80px;
+      height: 28px;
+      background-color: rgba(129, 178, 154, 0.6); /* セージグリーン半透明 */
+      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+      z-index: 10;
+      border-left: 2px dotted rgba(255,255,255,0.6);
+      border-right: 2px dotted rgba(255,255,255,0.6);
+    }
     
+    .masking-tape-terracotta { background-color: rgba(224, 122, 95, 0.6); transform: translateX(-50%) rotate(3deg); }
+    .masking-tape-mustard { background-color: rgba(242, 204, 143, 0.6); transform: translateX(-50%) rotate(-1deg); }
+
+    /* 画鋲（ピン）装飾 */
+    .pin {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 30% 30%, #fca5a5, #E07A5F);
+      box-shadow: 2px 3px 4px rgba(0,0,0,0.3), inset -1px -1px 3px rgba(0,0,0,0.2);
+      z-index: 10;
+    }
+    .pin::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background-color: rgba(255,255,255,0.6);
+    }
+    .pin-blue { background: radial-gradient(circle at 30% 30%, #93c5fd, #3D405B); }
+    .pin-yellow { background: radial-gradient(circle at 30% 30%, #fde047, #F2CC8F); }
+    .pin-green { background: radial-gradient(circle at 30% 30%, #86efac, #81B29A); }
+
+    /* ノートが開くようなフェードアニメーション */
+    @keyframes openNote {
+      0% { transform: translateY(20px); opacity: 0; }
+      100% { transform: translateY(0); opacity: 1; }
+    }
+    .animate-open-note {
+      animation: openNote 0.5s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+    }
+
     @keyframes popIn {
-      0% { transform: scale(0.9); opacity: 0; }
+      0% { transform: scale(0.95); opacity: 0; }
       100% { transform: scale(1); opacity: 1; }
     }
-    .animate-pop-in { animation: popIn 0.2s ease-out forwards; }
+    .animate-pop-in { animation: popIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
     
     canvas { touch-action: none; }
   </style>
@@ -176,7 +238,7 @@
         "たずねびと": "迷:めい:9:迷路で遊ぶ。|迷:まよ:9:道に迷う。|在:ざい:6:現在地を示す。|余:あま:7:時間が余る。|仏:ぶつ:4:仏像を拝む。|仏:ほとけ:4:仏の顔。| 独:どく:9:国が独立する。|独:ひと:9:独りぼっち。|弁:べん:5:お弁当を食べる。|検:けん:12:荷物を検査する。|提:てい:12:宿題を提出する。|提:さ:12:かばんを提げる。|寄:き:11:お金を寄付する。|寄:よ:11:友だちの家に寄る。",
         "よりよい学校生活のために": "価:か:8:商品の価格を下げる。|賛:さん:15:意見に賛成する。|略:りゃく:11:くわしい説明を省略する。|雑:ざっ:14:雑誌を読む。|条:じょう:7:条件に合う。|件:けん:6:事件の真相。 |保:ほ:9:食べ物を保存する。|保:たも:9:きれいな状態を保つ。|能:のう:10:能力をのばす。",
         "浦島太郎「御伽草子」より／和語・漢語・外来語": "妻:さい:8:夫妻で出席する。|妻:つま:8:私の妻です。|混:こん:11:頭が混乱する。|混:ま:11:絵の具が混ざる。|採:さい:11:昆虫を採集する。|採:と:11:血を採る。|禁:きん:13:立ち入り禁止だ。",
-    　  "固有種が教えてくれること": "過:か:12:過去の出来事。|過:す:12:時間が過ぎる。|程:てい:12:程度が低い。|豊:ほう:13:豊富なちしき。|豊:ゆた:13:豊かな自然。|布:ふ:5: 毛布をかける。|布:ぬの:5:布でつつむ。|減:げん:12:体重が減少する。|減:へ:12:お腹が減る。|護:ご:20:自然を保護する。|増:ぞう:14:人口が増加する。|増:ふ:14:体重が増える。|増:ま:14:不安が増す。|責:せき:11:責任をとる。|責:せ:11:相手を責める。|任:にん:6:仕事を一任する。|任:まか:6:リーダーを任せる。",
+        "固有種が教えてくれること": "過:か:12:過去の出来事。|過:す:12:時間が過ぎる。|程:てい:12:程度が低い。|豊:ほう:13:豊富なちしき。|豊:ゆた:13:豊かな自然。|布:ふ:5: 毛布をかける。|布:ぬの:5:布でつつむ。|減:げん:12:体重が減少する。|減:へ:12:お腹が減る。|護:ご:20:自然を保護する。|増:ぞう:14:人口が増加する。|増:ふ:14:体重が増える。|増:ま:14:不安が増す。|責:せき:11:責任をとる。|責:せ:11:相手を責める。|任:にん:6:仕事を一任する。|任:まか:6:リーダーを任せる。",
         "自然環境を守るために": "統:とう:12:クラスを統一する。|酸:さん:14:酸素を吸う。|素:そ:10:すばらしい素材。|設:せつ:11:ビルを建設する。|設:もう:11:新しいルールを設ける。",
         "カンジー博士の暗号解読": "織:しき:18:会社という組織。|織:お:18:布を織る。|財:ざい:10:財産を残す。|築:ちく:16:建物を建築する。|築:きず:16:信頼関係を築く。|則:そく:9:規則を守る。|規:き:11:規則を守る。|基:き:11:基本が大切だ。|基:もと:11:事実に基づく。|液:えき:11:ふしぎな液体を作る。|額:がく:18:金額を計算する。|額:ひたい:18:額に汗をかく。|故:こ:9:交通事故を防ぐ。|授:じゅ:11:授業が始まる。|授:さず:11:賞状を授ける。",
         "やなせたかし――アンパンマンの勇気": "証:しょう:12:身分を証明する。|婦:ふ:11:産婦人科の医者。|格:かく:10:テストに合格する。|職:しょく:18:職業を選ぶ。|移:い:11:次の場所に移動する。|移:うつ:11:となりの席に移る。|墓:ぼ:13:墓地に行く。|墓:はか:13:お墓参りする。|義:ぎ:13:正義の味方。|貧:ひん:11:貧困をなくす。|貧:まず:11:貧しい生活。|版:ぱん:8:出版社の仕事。|評:ひょう:12:作品を評価する。",
@@ -233,46 +295,56 @@
       });
     });
 
-    const GRADE_COLORS = {
-      1: '#E4000F', 2: '#F1E100', 3: '#009B48', 
-      4: '#0033A6', 5: '#800080', 6: '#333333'
+    // 北欧風デザインのコンポーネント群
+    const GradeBox = ({ grade, onClick }) => {
+      // 学年ごとにピンの色とテープの傾きを変える
+      const pinColors = ['', 'pin-blue', 'pin-yellow', 'pin-green', '', 'pin-blue'];
+      const pinClass = pinColors[grade - 1] || '';
+      const tapeRotations = ['rotate-[-3deg]', 'rotate-[2deg]', 'rotate-[-1deg]', 'rotate-[4deg]', 'rotate-[-2deg]', 'rotate-[1deg]'];
+      const rotation = tapeRotations[grade - 1];
+
+      return (
+        <div 
+          onClick={onClick}
+          className={`bg-paper w-full aspect-[4/3] rounded-sm flex flex-col items-center justify-center relative cursor-pointer hover:-translate-y-1 hover:shadow-lg transition-all shadow-md ${rotation}`}
+        >
+          <div className={`pin ${pinClass}`}></div>
+          <span className="font-rounded text-3xl sm:text-4xl font-bold text-bluegrey mt-2">{grade}年生</span>
+        </div>
+      );
     };
 
-    const GradeBox = ({ grade, onClick }) => (
-      <div 
-        onClick={onClick}
-        className="bg-gray-700 w-full aspect-[4/3] rounded-xl border-4 border-gray-900 shadow-[4px_6px_0_rgba(0,0,0,0.5)] flex flex-col items-center justify-center relative cursor-pointer hover:-translate-y-1 hover:shadow-[6px_8px_0_rgba(0,0,0,0.4)] transition-all overflow-hidden"
-      >
-        <div className="absolute top-0 w-full h-1/4 bg-gray-800 border-b-4 border-gray-900 flex justify-center">
-           <div className="w-16 h-3 bg-black rounded-b-lg opacity-80 mt-1"></div>
-        </div>
-        <span className="font-pixel text-3xl sm:text-5xl font-bold text-white mt-4 drop-shadow-md">{grade}年生</span>
-      </div>
-    );
+    // ★修正: isSelected を受け取り、選択状態の見た目を変更できるようにした
+    const UnitNote = ({ grade, title, onClick, isSelected }) => {
+      const tapeClasses = ['masking-tape', 'masking-tape-terracotta', 'masking-tape-mustard'];
+      const tapeClass = tapeClasses[grade % 3];
 
-    const Cartridge = ({ grade, title, onClick, isInserted }) => (
-      <div 
-        onClick={!isInserted ? onClick : undefined}
-        className={`bg-[#D8D8D8] rounded-t-xl border-b-[6px] border-[#888888] shadow-lg flex flex-col items-center pt-2 px-2 relative transition-transform
-          ${!isInserted ? 'w-full h-24 sm:h-28 cursor-pointer hover:-translate-y-1' : 'w-[190px] sm:w-[250px] h-20 sm:h-24 shadow-none'}`}
-      >
-        <div className="flex justify-between w-full px-4 mb-2">
-          <div className="w-6 h-2 bg-[#888888] rounded-full shadow-inner"></div>
-          <div className="w-6 h-2 bg-[#888888] rounded-full shadow-inner"></div>
-        </div>
-        <div className="w-full flex-1 mb-2 rounded border-4 border-gray-800 flex items-center justify-center shadow-inner relative overflow-hidden p-2" style={{ backgroundColor: GRADE_COLORS[grade] }}>
-          <div className="absolute top-0 left-0 w-full h-1/2 bg-white/20"></div>
-          <span className={`font-kyokasho text-white font-bold drop-shadow-md z-10 text-center leading-snug ${isInserted ? 'text-xs sm:text-sm' : 'text-sm sm:text-base'}`}>
+      return (
+        <div 
+          onClick={onClick}
+          className={`bg-white w-full h-24 sm:h-28 rounded-sm flex flex-col items-center justify-center relative cursor-pointer transition-all p-3
+            ${isSelected 
+              ? 'border-4 border-terracotta transform -translate-y-1 shadow-lg ring-2 ring-terracotta/30' 
+              : 'border border-gray-100 shadow-md hover:-translate-y-1 hover:shadow-lg'}`}
+        >
+          <div className={tapeClass}></div>
+          {isSelected && (
+            <div className="absolute -top-3 -right-3 w-7 h-7 sm:w-8 sm:h-8 bg-terracotta text-white rounded-full flex items-center justify-center font-bold text-lg sm:text-xl shadow-md border-2 border-white z-20">
+              ✓
+            </div>
+          )}
+          <span className="font-rounded text-bluegrey font-bold text-center leading-snug text-sm sm:text-base mt-2">
             {title}
           </span>
         </div>
-      </div>
-    );
+      );
+    };
 
     const App = () => {
       const [gameState, setGameState] = useState('TITLE'); 
       const [selectedGrade, setSelectedGrade] = useState(1);
-      const [selectedUnit, setSelectedUnit] = useState('');
+      // ★修正: selectedUnit を配列に変更し、複数選択に対応
+      const [selectedUnits, setSelectedUnits] = useState([]);
       const [questions, setQuestions] = useState([]);
       const [currentIndex, setCurrentIndex] = useState(0);
       const [score, setScore] = useState(0);
@@ -284,7 +356,6 @@
       const [difficulty, setDifficulty] = useState(0.60);
       const [errorMessage, setErrorMessage] = useState('');
       const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-      const [isPowerOn, setIsPowerOn] = useState(false);
       
       const bgCanvasRef = useRef(null);
       const drawCanvasRef = useRef(null);
@@ -293,14 +364,21 @@
       const pathsRef = useRef([]);
       const currentPathRef = useRef([]);
 
+      // ★修正: 選択された複数の単元の問題データを合体してシャッフルするように変更
       const startGame = (mode) => {
-        const filtered = KANJI_DATA[selectedGrade][selectedUnit] || [];
-        const shuffled = [...filtered].sort(() => 0.5 - Math.random());
+        let combinedQuestions = [];
+        selectedUnits.forEach(unit => {
+          const filtered = KANJI_DATA[selectedGrade][unit] || [];
+          combinedQuestions = [...combinedQuestions, ...filtered];
+        });
         
-        if(shuffled.length === 0) {
-            alert('この学年の問題がありません！');
+        if(combinedQuestions.length === 0) {
+            alert('このたんげんの もんだいは まだ ありません！\n(先生にデータを追加してもらってね)');
             return;
         }
+
+        const shuffled = combinedQuestions.sort(() => 0.5 - Math.random());
+        
         setQuestions(shuffled);
         setCurrentIndex(0);
         setScore(0);
@@ -330,28 +408,32 @@
         }
       };
 
+      // ★修正: 学年選択時に選択中の単元をリセットする
       const selectGrade = (grade) => {
         setSelectedGrade(grade);
+        setSelectedUnits([]);
         setGameState('UNIT_SELECT');
       };
 
-      const selectUnit = (unit) => {
-        const data = KANJI_DATA[selectedGrade][unit];
-        if(!data || data.length === 0) {
-            alert('この たんげんの もんだいは まだ ありません！\n（先生にデータを追加してもらってね）');
-            return;
-        }
-        setSelectedUnit(unit);
-        setGameState('INSERTING');
-        setIsPowerOn(false);
-        
-        setTimeout(() => {
-          setIsPowerOn(true);
-        }, 800);
+      // ★追加: 単元の選択・解除を切り替える処理
+      const toggleUnit = (unit) => {
+        setSelectedUnits(prev => 
+          prev.includes(unit) 
+            ? prev.filter(u => u !== unit) 
+            : [...prev, unit]
+        );
+      };
 
+      // ★修正: 選択を決定してメニュー画面へ進む処理
+      const decideUnits = () => {
+        if (selectedUnits.length === 0) {
+          alert('たんげんを 1つ以上 えらんでね！');
+          return;
+        }
+        setGameState('INSERTING');
         setTimeout(() => {
           setGameState('MENU');
-        }, 1800);
+        }, 1200);
       };
 
       const renderQuestionText = (mode) => {
@@ -359,18 +441,18 @@
         if (!q) return null;
         const parts = q.s.split(q.k);
         return (
-          <div className="w-full text-center bg-white p-3 sm:p-5 rounded-xl border-4 border-gray-300 shadow-sm my-1 sm:my-2 relative shrink-0">
-            <p className="text-2xl sm:text-4xl font-kyokasho text-gray-800 leading-normal tracking-wide">
+          <div className="w-full text-center bg-white/80 p-3 sm:p-5 rounded-lg border border-gray-200 shadow-sm my-1 sm:my-2 relative shrink-0">
+            <p className="text-2xl sm:text-4xl font-kyokasho text-bluegrey leading-normal tracking-wide">
               {parts.map((part, index) => (
                 <React.Fragment key={index}>
                   {part}
                   {index < parts.length - 1 && (
                     mode === 'READ' ? (
-                      <span className="border-b-4 border-[var(--sfc-red)] pb-1 mx-1 text-[var(--sfc-red)]">
+                      <span className="border-b-4 border-terracotta pb-1 mx-1 text-terracotta">
                         {q.k}
                       </span>
                     ) : (
-                      <span className="border-b-4 border-[var(--sfc-blue)] pb-1 mx-1 text-[var(--sfc-blue)]">
+                      <span className="border-b-4 border-sage pb-1 mx-1 text-sage">
                         {q.y}
                       </span>
                     )
@@ -378,14 +460,13 @@
                 </React.Fragment>
               ))}
             </p>
-            {/* ★修正：読む問題でのエラーメッセージ（正しい読み方）表示に対応 */}
             {feedback && gameState === 'READ' && (
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-50">
-                <span className="text-[7rem] sm:text-[9rem] text-[var(--sfc-red)] drop-shadow-xl opacity-90 leading-none">
+                <span className={`text-[7rem] sm:text-[9rem] drop-shadow-md opacity-90 leading-none ${feedback === '⭕️' ? 'text-sage' : 'text-terracotta'}`}>
                   {feedback}
                 </span>
                 {errorMessage && (
-                  <div className="mt-2 bg-white/95 px-3 py-1 sm:px-4 sm:py-2 rounded-xl border-4 border-[var(--sfc-red)] text-[var(--sfc-red)] font-pixel text-xs sm:text-base text-center whitespace-pre-wrap shadow-lg">
+                  <div className="mt-2 bg-white/95 px-4 py-2 rounded-xl border-4 border-terracotta text-terracotta font-rounded text-sm sm:text-base text-center whitespace-pre-wrap shadow-lg">
                     {errorMessage}
                   </div>
                 )}
@@ -395,7 +476,6 @@
         );
       };
 
-      // ★修正：「読む」で間違えた際に、正しい読み方を表示し、待機時間を長くする
       const checkReading = () => {
         if(!userInput) return;
         const currentQ = questions[currentIndex];
@@ -407,13 +487,13 @@
           setScore(s => s + 1);
           setTimeout(() => {
             goToNextQuestion('READ');
-          }, 1500); // 正解時は1.5秒で次へ
+          }, 1500);
         } else {
           setFeedback('❌');
           setErrorMessage(`せいかいは「${currentQ.y}」だよ！`);
           setTimeout(() => {
             goToNextQuestion('READ');
-          }, 2500); // 不正解時は2.5秒待ってから次へ
+          }, 2500);
         }
       };
 
@@ -449,13 +529,15 @@
         const bgCtx = bgCanvas.getContext('2d', { willReadFrequently: true });
         bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
         
-        bgCtx.fillStyle = '#FFFFFF';
+        // 方眼紙風背景（薄い緑）
+        bgCtx.fillStyle = '#ffffff';
         bgCtx.fillRect(0, 0, bgCanvas.width, bgCanvas.height);
 
         bgCtx.save();
-        bgCtx.strokeStyle = '#4ADE80';
-        bgCtx.lineWidth = 3;
-        bgCtx.setLineDash([10, 10]);
+        bgCtx.strokeStyle = '#81B29A'; // sage green
+        bgCtx.globalAlpha = 0.5;
+        bgCtx.lineWidth = 2;
+        bgCtx.setLineDash([8, 8]);
         bgCtx.beginPath();
         bgCtx.moveTo(bgCanvas.width / 2, 0);
         bgCtx.lineTo(bgCanvas.width / 2, bgCanvas.height);
@@ -468,7 +550,7 @@
           bgCtx.font = `340px "UD Digi Kyokasho N-B", "UD デジタル 教科書体 N-B", "Klee One", serif`;
           bgCtx.textAlign = 'center';
           bgCtx.textBaseline = 'middle';
-          bgCtx.fillStyle = 'rgba(0, 0, 0, 0.15)'; 
+          bgCtx.fillStyle = 'rgba(61, 64, 91, 0.1)'; // bluegrey (薄く)
           bgCtx.fillText(questions[currentIndex].k, bgCanvas.width / 2, bgCanvas.height / 2);
         }
       };
@@ -498,7 +580,7 @@
         ctx.lineWidth = penSize;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.strokeStyle = '#374151';
+        ctx.strokeStyle = '#3D405B'; // bluegrey
         ctx.stroke();
       };
 
@@ -512,7 +594,7 @@
         ctx.lineWidth = penSize;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.strokeStyle = '#374151';
+        ctx.strokeStyle = '#3D405B'; // bluegrey
         ctx.stroke();
       };
 
@@ -637,9 +719,7 @@
         }
 
         const coverRate = targetPixelCount === 0 ? 0 : coveredPixelCount / targetPixelCount;
-        
         const isNotCheating = userPixelCount < targetPixelCount * 3.5;
-
         const userStrokeCount = pathsRef.current.length;
         const targetStrokeCount = questions[currentIndex].stroke;
         const isStrokeCorrect = userStrokeCount === targetStrokeCount;
@@ -676,7 +756,7 @@
             bgCtx.font = `340px "UD Digi Kyokasho N-B", "UD デジタル 教科書体 N-B", "Klee One", serif`;
             bgCtx.textAlign = 'center';
             bgCtx.textBaseline = 'middle';
-            bgCtx.fillStyle = 'rgba(228, 0, 15, 0.4)'; 
+            bgCtx.fillStyle = 'rgba(224, 122, 95, 0.3)'; // terracotta
             bgCtx.fillText(questions[currentIndex].k, bgCanvas.width / 2, bgCanvas.height / 2);
           }
 
@@ -688,25 +768,30 @@
         }
       };
 
+      // 選択した単元名をメニューで表示するための処理
+      const displayUnitName = selectedUnits.length === 1 
+        ? selectedUnits[0] 
+        : `${selectedUnits[0]} など ${selectedUnits.length}つのノート`;
+
       return (
-        <div className="w-full h-full flex flex-col items-center justify-center relative overflow-hidden bg-[var(--sfc-gray-light)]">
+        <div className="w-full h-full flex flex-col items-center justify-center relative overflow-hidden bg-cork">
           
           {(gameState === 'TITLE' || gameState === 'UNIT_SELECT') && (
             <button 
               onClick={() => setIsSettingsOpen(true)}
-              className="absolute top-4 right-4 sm:top-6 sm:right-6 bg-gray-800 text-white w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center text-2xl sm:text-3xl shadow-[0_6px_0_#000] active:translate-y-1 active:shadow-none transition-all z-40"
+              className="absolute top-4 right-4 sm:top-6 sm:right-6 bg-white/80 text-bluegrey w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center text-2xl sm:text-3xl shadow-sm hover:shadow-md transition-all z-40 border border-gray-200"
             >
               ⚙️
             </button>
           )}
 
           {isSettingsOpen && (
-            <div className="absolute inset-0 bg-black/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-              <div className="bg-white p-6 sm:p-8 rounded-2xl border-8 border-gray-800 shadow-2xl w-full max-w-md relative animate-pop-in">
-                <h2 className="font-pixel text-3xl font-bold mb-6 text-center text-gray-800 border-b-4 border-gray-300 pb-2">せってい</h2>
+            <div className="absolute inset-0 bg-black/40 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-paper p-6 sm:p-8 rounded-2xl shadow-2xl w-full max-w-md relative animate-pop-in border border-white">
+                <h2 className="font-rounded text-3xl font-bold mb-6 text-center text-bluegrey border-b-2 border-sage pb-2">せってい</h2>
                 
                 <div className="mb-8">
-                  <p className="font-pixel text-gray-600 mb-4 text-xl text-center">ペンの ふとさ</p>
+                  <p className="font-rounded text-bluegrey/80 mb-4 text-xl text-center">ペンの ふとさ</p>
                   <div className="flex justify-center gap-4 sm:gap-6">
                     {[
                       { size: 15, label: 'ほそい' },
@@ -716,21 +801,21 @@
                       <button
                         key={p.size}
                         onClick={() => setPenSize(p.size)}
-                        className={`w-20 h-20 rounded-full flex flex-col items-center justify-center border-4 transition-all ${
+                        className={`w-20 h-20 rounded-full flex flex-col items-center justify-center border-2 transition-all ${
                           penSize === p.size 
-                            ? 'bg-gray-600 border-gray-800 text-white shadow-inner scale-110' 
-                            : 'bg-white border-gray-400 text-gray-400 hover:bg-gray-100'
+                            ? 'bg-sage border-sage text-white shadow-inner scale-110' 
+                            : 'bg-white border-gray-300 text-gray-400 hover:bg-gray-50'
                         }`}
                       >
                         <div className="bg-current rounded-full mb-1" style={{ width: p.size/2.5, height: p.size/2.5 }}></div>
-                        <span className="font-pixel text-xs">{p.label}</span>
+                        <span className="font-rounded text-xs">{p.label}</span>
                       </button>
                     ))}
                   </div>
                 </div>
 
                 <div className="mb-10">
-                  <p className="font-pixel text-gray-600 mb-4 text-xl text-center">はんていの きびしさ</p>
+                  <p className="font-rounded text-bluegrey/80 mb-4 text-xl text-center">はんていの きびしさ</p>
                   <div className="flex justify-center gap-2 sm:gap-4">
                     {[
                       { rate: 0.45, label: 'かんたん' },
@@ -740,10 +825,10 @@
                       <button
                         key={d.rate}
                         onClick={() => setDifficulty(d.rate)}
-                        className={`px-3 py-3 sm:px-4 sm:py-4 font-pixel text-sm sm:text-base rounded-xl border-b-4 transition-all ${
+                        className={`px-3 py-3 sm:px-4 sm:py-4 font-rounded text-sm sm:text-base rounded-xl transition-all ${
                           difficulty === d.rate
-                            ? 'bg-gray-600 border-gray-800 text-white translate-y-1 border-b-0 shadow-inner'
-                            : 'bg-white border-gray-400 text-gray-600 hover:bg-gray-100'
+                            ? 'bg-sage text-white shadow-inner'
+                            : 'bg-white border border-gray-300 text-gray-500 hover:bg-gray-50'
                         }`}
                       >
                         {d.label}
@@ -754,7 +839,7 @@
 
                 <button 
                   onClick={() => setIsSettingsOpen(false)}
-                  className="w-full bg-[var(--sfc-red)] text-white font-pixel py-4 rounded-full shadow-[0_6px_0_#8B0000] active:translate-y-1 active:shadow-none text-2xl transition-all"
+                  className="w-full bg-terracotta text-white font-rounded py-4 rounded-full shadow-md active:translate-y-1 active:shadow-sm text-2xl transition-all"
                 >
                   とじる
                 </button>
@@ -764,9 +849,12 @@
 
           {gameState === 'TITLE' && (
             <div className="w-full h-full flex flex-col items-center justify-center p-4">
-              <h1 className="font-pixel text-4xl sm:text-5xl font-bold mb-2 text-gray-800 drop-shadow-md">カンジクエスト</h1>
-              <p className="font-pixel text-gray-600 mb-8">がくねん を えらんでね</p>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-6 sm:gap-10 w-full max-w-2xl">
+              <div className="bg-paper px-8 py-4 sm:py-6 rounded-sm shadow-md mb-8 transform -rotate-1 relative">
+                <div className="masking-tape"></div>
+                <h1 className="font-rounded text-4xl sm:text-5xl font-bold text-bluegrey tracking-wider">カンジノート</h1>
+              </div>
+              <p className="font-rounded text-white bg-bluegrey/80 px-4 py-1 rounded-full mb-8 text-sm sm:text-base">がくねん を えらんでね</p>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-6 sm:gap-10 w-full max-w-2xl px-4">
                 {[1, 2, 3, 4, 5, 6].map(grade => (
                   <GradeBox key={grade} grade={grade} onClick={() => selectGrade(grade)} />
                 ))}
@@ -774,90 +862,99 @@
             </div>
           )}
 
+          {/* ★修正: 複数選択対応のUI */}
           {gameState === 'UNIT_SELECT' && (
-            <div className="w-full h-full flex flex-col items-center p-4 overflow-y-auto pb-20">
-              <div className="w-full max-w-4xl flex flex-col sm:flex-row justify-between items-center mb-6 mt-4 gap-4">
-                <button onClick={() => setGameState('TITLE')} className="font-pixel text-gray-600 underline text-lg">← がくねんをえらびなおす</button>
-                <h2 className="font-pixel text-2xl font-bold text-gray-800">{selectedGrade}ねんせい の カセット</h2>
+            <div className="w-full h-full flex flex-col items-center relative">
+              
+              {/* ヘッダー部分 */}
+              <div className="w-full flex-none pt-4 px-4 flex flex-col items-center">
+                <div className="w-full max-w-4xl flex flex-col sm:flex-row justify-between items-center mb-4 gap-4 bg-paper/90 p-4 rounded-lg shadow-sm border border-white">
+                  <button onClick={() => setGameState('TITLE')} className="font-rounded text-bluegrey/70 underline text-lg hover:text-bluegrey">← がくねんをえらびなおす</button>
+                  <h2 className="font-rounded text-2xl font-bold text-bluegrey">{selectedGrade}ねんせい の ノート</h2>
+                </div>
+                
+                {/* 複数選択の補助ボタン */}
+                <div className="w-full max-w-4xl flex justify-end gap-6 px-2 mb-2">
+                  <button onClick={() => setSelectedUnits(Object.keys(KANJI_DATA[selectedGrade]))} className="font-rounded text-sm font-bold text-sage underline hover:text-green-700 transition-colors">すべてえらぶ</button>
+                  <button onClick={() => setSelectedUnits([])} className="font-rounded text-sm font-bold text-terracotta underline hover:text-red-700 transition-colors">ぜんぶけす</button>
+                </div>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 w-full max-w-4xl">
-                {Object.keys(KANJI_DATA[selectedGrade]).map(unit => (
-                  <Cartridge key={unit} grade={selectedGrade} title={unit} onClick={() => selectUnit(unit)} />
-                ))}
+              
+              {/* スクロール領域（決定ボタンに隠れないように余白確保） */}
+              <div className="w-full flex-1 overflow-y-auto px-4 pb-32">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 w-full max-w-4xl mx-auto">
+                  {Object.keys(KANJI_DATA[selectedGrade]).map(unit => (
+                    <UnitNote 
+                      key={unit} 
+                      grade={selectedGrade} 
+                      title={unit} 
+                      isSelected={selectedUnits.includes(unit)}
+                      onClick={() => toggleUnit(unit)} 
+                    />
+                  ))}
+                </div>
               </div>
+
+              {/* 決定ボタン（フローティング） */}
+              {selectedUnits.length > 0 && (
+                <div className="absolute bottom-6 w-full flex justify-center animate-open-note z-10 px-4 pointer-events-none">
+                  <button 
+                    onClick={decideUnits}
+                    className="bg-sage text-white font-rounded py-3 px-8 sm:py-4 sm:px-12 rounded-full shadow-lg active:translate-y-1 active:shadow-md flex items-center justify-center gap-3 text-lg sm:text-xl transition-all border-4 border-white w-full max-w-sm pointer-events-auto"
+                  >
+                    <span>{selectedUnits.length}つのノートをひらく</span>
+                  </button>
+                </div>
+              )}
+
             </div>
           )}
 
           {gameState === 'INSERTING' && (
-            <div className="w-full h-full bg-[#1A1A1A] flex items-end justify-center pb-10 sm:pb-20 relative overflow-hidden">
-              <div className="relative w-[300px] sm:w-[400px] h-64 bg-[#D0D0D0] rounded-t-[40px] border-t-[10px] border-x-[10px] border-gray-400 shadow-[0_-10px_40px_rgba(0,0,0,0.8)] flex flex-col items-center pt-4 z-20">
-                
-                <div className="absolute top-[-60px] sm:top-[-70px] z-10 animate-insert">
-                  <Cartridge grade={selectedGrade} title={selectedUnit} isInserted={true} />
-                </div>
-
-                <div className="w-[200px] sm:w-[260px] h-8 bg-gray-900 rounded-full shadow-[inset_0_4px_8px_rgba(0,0,0,0.8)] absolute top-6 z-0"></div>
-                
-                <div className="w-[220px] sm:w-[280px] h-12 bg-[#B0B0B0] rounded-t-xl absolute top-8 z-30 shadow-md flex justify-center border-t border-gray-300">
-                   <div className="w-[180px] sm:w-[240px] h-2 bg-gray-800 rounded-full mt-2 opacity-50 shadow-inner"></div>
-                </div>
-                
-                <div className="w-full h-full mt-16 bg-[#C8C8C8] rounded-t-3xl z-30 flex relative border-t-2 border-white shadow-inner pt-6 px-4">
-                  <div className="flex-1 flex flex-col items-center">
-                    <div className="w-10 sm:w-12 h-14 sm:h-16 bg-gray-400 rounded-lg shadow-[inset_0_4px_6px_rgba(0,0,0,0.3)] p-1 relative border-b-2 border-white overflow-hidden">
-                      <div className={`absolute left-1 right-1 h-6 rounded shadow-[0_2px_4px_rgba(0,0,0,0.4)] transition-all duration-150 ease-in-out ${isPowerOn ? 'top-1 bg-gray-200' : 'bottom-1 bg-gray-500'}`}></div>
-                    </div>
-                    <span className="font-pixel text-[10px] sm:text-xs text-gray-500 mt-2 font-bold tracking-wider">POWER</span>
-                    <div className={`w-3 h-3 rounded-full mt-3 transition-colors duration-150 ${isPowerOn ? 'bg-red-500 shadow-[0_0_10px_#F00]' : 'bg-red-900 shadow-inner'}`}></div>
-                  </div>
-                  <div className="flex-1 flex justify-center pt-2">
-                    <div className="w-20 sm:w-24 h-8 sm:h-10 bg-gray-400 rounded-full shadow-[0_4px_0_#999] border-t border-gray-200 flex items-center justify-center">
-                      <span className="font-pixel text-[10px] sm:text-xs text-gray-600 font-bold tracking-wider">EJECT</span>
-                    </div>
-                  </div>
-                  <div className="flex-1 flex flex-col items-center">
-                     <div className="w-10 sm:w-12 h-14 sm:h-16 bg-gray-400 rounded-lg shadow-[inset_0_4px_6px_rgba(0,0,0,0.3)] p-1 relative border-b-2 border-white">
-                      <div className="absolute left-1 right-1 h-6 bg-gray-500 rounded bottom-1 shadow-[0_2px_4px_rgba(0,0,0,0.4)]"></div>
-                    </div>
-                    <span className="font-pixel text-[10px] sm:text-xs text-gray-500 mt-2 font-bold tracking-wider">RESET</span>
-                  </div>
-                </div>
+            <div className="w-full h-full flex items-center justify-center bg-black/20 backdrop-blur-sm z-50 absolute top-0 left-0">
+              <div className="bg-paper p-8 rounded-lg shadow-xl flex flex-col items-center animate-pop-in">
+                <div className="w-16 h-16 border-4 border-sage border-t-transparent rounded-full animate-spin mb-4"></div>
+                <p className="font-rounded text-bluegrey text-xl font-bold">ノートをひらいています...</p>
               </div>
             </div>
           )}
 
           {['MENU', 'READ', 'WRITE', 'PRACTICE', 'RESULT'].includes(gameState) && (
-            <div className="w-full h-full bg-[var(--tv-bg)] flex flex-col p-2 sm:p-4 animate-tv-on text-white">
-              <div className="w-full max-w-4xl mx-auto flex-1 flex flex-col items-center justify-center border-8 border-gray-800 rounded-2xl sm:rounded-3xl bg-gray-100 text-gray-900 p-2 sm:p-4 shadow-[0_0_50px_rgba(0,0,0,0.8)_inset] overflow-hidden relative">
+            <div className="w-full h-full flex flex-col p-4 sm:p-8 relative">
+              <div className="w-full max-w-4xl mx-auto flex-1 flex flex-col items-center justify-center bg-paper rounded-sm shadow-xl text-gray-900 p-4 sm:p-6 overflow-hidden relative animate-open-note border border-white">
                 
                 {gameState === 'MENU' && (
                   <div className="text-center w-full relative h-full flex flex-col items-center justify-center">
                     <button 
-                      onClick={() => {
-                        setIsPowerOn(false);
-                        setGameState('UNIT_SELECT');
-                      }} 
-                      className="absolute top-0 left-0 font-pixel text-gray-500 underline hover:text-gray-800"
+                      onClick={() => setGameState('UNIT_SELECT')} 
+                      className="absolute top-2 left-2 font-rounded text-bluegrey/60 underline hover:text-bluegrey text-sm sm:text-base"
                     >
-                      ← カセットを ぬく
+                      ← もどる
                     </button>
                     
-                    <p className="font-kyokasho font-bold text-gray-500 mb-2 mt-8">{selectedGrade}年生</p>
-                    <h2 className="font-kyokasho text-xl sm:text-2xl font-bold mb-8 sm:mb-12 border-b-4 pb-2 sm:pb-4 inline-block border-gray-400 px-4">
-                      {selectedUnit}
-                    </h2>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 sm:gap-8 w-full max-w-2xl mx-auto">
+                    <div className="bg-white px-8 py-4 rounded-full shadow-sm mb-8 border border-gray-100 flex flex-col items-center">
+                      <p className="font-rounded text-sage font-bold mb-1">{selectedGrade}年生</p>
+                      <h2 className="font-rounded text-xl sm:text-2xl font-bold text-bluegrey border-b-2 border-sage pb-1 inline-block">
+                        {displayUnitName}
+                      </h2>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 sm:gap-10 w-full max-w-lg mx-auto">
                       <button onClick={() => startGame('READ')} className="group flex flex-col items-center">
-                        <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-[var(--sfc-red)] shadow-[0_8px_0_#8B0000] group-active:translate-y-2 group-active:shadow-none transition-all flex items-center justify-center border-4 border-gray-200 mb-4">
-                          <span className="font-pixel text-white text-3xl font-bold">A</span>
+                        <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-3xl bg-mustard shadow-[0_6px_0_#d4a96a] group-active:translate-y-2 group-active:shadow-none transition-all flex items-center justify-center border-4 border-white mb-4 transform group-hover:scale-105">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                          </svg>
                         </div>
-                        <span className="font-pixel text-2xl font-bold text-gray-800">よむ</span>
+                        <span className="font-rounded text-2xl font-bold text-bluegrey">よむ</span>
                       </button>
                       <button onClick={() => startGame('WRITE')} className="group flex flex-col items-center">
-                        <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-[var(--sfc-yellow)] shadow-[0_8px_0_#B8860B] group-active:translate-y-2 group-active:shadow-none transition-all flex items-center justify-center border-4 border-gray-200 mb-4">
-                          <span className="font-pixel text-gray-800 text-3xl font-bold">B</span>
+                        <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-3xl bg-terracotta shadow-[0_6px_0_#b55b45] group-active:translate-y-2 group-active:shadow-none transition-all flex items-center justify-center border-4 border-white mb-4 transform group-hover:scale-105">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                          </svg>
                         </div>
-                        <span className="font-pixel text-2xl font-bold text-gray-800">かく</span>
+                        <span className="font-rounded text-2xl font-bold text-bluegrey">かく</span>
                       </button>
                     </div>
                   </div>
@@ -865,14 +962,14 @@
 
                 {gameState === 'READ' && questions.length > 0 && (
                   <div className="w-full h-full flex flex-col items-center justify-between pt-2">
-                    <div className="w-full flex justify-between items-center font-pixel text-lg sm:text-xl text-gray-500 mb-2 px-2">
+                    <div className="w-full flex justify-between items-center font-rounded text-lg sm:text-xl text-bluegrey/70 mb-2 px-2">
                       <button 
                         onClick={() => {
                           setFeedback(null);
                           setUserInput('');
                           setGameState('MENU');
                         }} 
-                        className="underline text-sm sm:text-base hover:text-gray-800"
+                        className="underline text-sm sm:text-base hover:text-bluegrey"
                         disabled={feedback !== null}
                       >
                         ←やめる
@@ -886,7 +983,7 @@
                     {renderQuestionText('READ')}
                     
                     <div className="w-full max-w-lg flex flex-col gap-3 sm:gap-4 mt-auto mb-2 px-2">
-                      <p className="font-pixel text-center text-sm sm:text-lg text-gray-600">あかい せん の よみを ひらがな で いれてね</p>
+                      <p className="font-rounded text-center text-sm sm:text-base text-bluegrey/80">あかい せん の よみを ひらがな で いれてね</p>
                       <input 
                         ref={inputRef}
                         type="text" 
@@ -894,15 +991,14 @@
                         onChange={(e) => setUserInput(e.target.value)}
                         onKeyDown={handleKeyDown}
                         disabled={feedback !== null}
-                        className="w-full p-3 sm:p-4 rounded-xl border-4 border-gray-300 font-bold text-xl sm:text-2xl text-center focus:outline-none focus:border-[var(--sfc-blue)]"
+                        className="w-full p-3 sm:p-4 rounded-xl border-2 border-gray-300 font-bold text-xl sm:text-2xl text-center focus:outline-none focus:border-sage bg-white"
                         placeholder="ひらがな"
                       />
                       <button 
                         onClick={checkReading}
                         disabled={feedback !== null}
-                        className="bg-[var(--sfc-blue)] text-white font-pixel py-3 sm:py-4 px-6 rounded-full shadow-[0_6px_0_#000080] active:translate-y-1 active:shadow-none flex items-center justify-center gap-3 text-lg sm:text-xl transition-all"
+                        className="bg-sage text-white font-rounded py-3 sm:py-4 px-6 rounded-full shadow-md active:translate-y-1 active:shadow-sm flex items-center justify-center gap-3 text-lg sm:text-xl transition-all"
                       >
-                        <span className="bg-white text-[var(--sfc-blue)] rounded-full w-6 h-6 sm:w-8 sm:h-8 flex items-center justify-center text-xs sm:text-sm font-bold">X</span>
                         けってい (Enter)
                       </button>
                     </div>
@@ -911,7 +1007,7 @@
 
                 {(gameState === 'WRITE' || gameState === 'PRACTICE') && questions.length > 0 && (
                   <div className="w-full h-full flex flex-col items-center justify-between pt-1 sm:pt-2">
-                    <div className="w-full flex justify-between items-center font-pixel text-lg sm:text-xl text-gray-500 mb-1 px-2">
+                    <div className="w-full flex justify-between items-center font-rounded text-lg sm:text-xl text-bluegrey/70 mb-1 px-2">
                       <button 
                         onClick={() => {
                           setFeedback(null);
@@ -920,14 +1016,14 @@
                           currentPathRef.current = [];
                           setGameState('MENU');
                         }} 
-                        className="underline text-sm sm:text-base hover:text-gray-800"
+                        className="underline text-sm sm:text-base hover:text-bluegrey"
                         disabled={feedback !== null}
                       >
                         ←やめる
                       </button>
                       <div className="flex gap-4">
                         {gameState === 'PRACTICE' ? (
-                          <span className="text-[var(--sfc-red)] font-bold animate-pulse">れんしゅう モード</span>
+                          <span className="text-terracotta font-bold animate-pulse">れんしゅう モード</span>
                         ) : (
                           <span>{currentIndex + 1} / {questions.length}</span>
                         )}
@@ -938,7 +1034,7 @@
                     {renderQuestionText('WRITE')}
                     
                     <div 
-                      className="relative border-4 border-green-600 rounded-lg aspect-square shadow-md overflow-hidden bg-white shrink-0 my-2" 
+                      className="relative rounded-lg aspect-square shadow-sm overflow-hidden bg-white shrink-0 my-2 border border-gray-200" 
                       style={{ width: '100%', maxWidth: 'min(400px, 45vh)' }}
                     >
                       <canvas
@@ -963,11 +1059,11 @@
                       
                       {feedback && gameState === 'WRITE' && (
                         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-50">
-                          <span className="text-[7rem] sm:text-[9rem] text-[var(--sfc-red)] drop-shadow-xl opacity-90 leading-none">
+                          <span className={`text-[7rem] sm:text-[9rem] drop-shadow-md opacity-90 leading-none ${feedback === '⭕️' ? 'text-sage' : 'text-terracotta'}`}>
                             {feedback}
                           </span>
                           {errorMessage && (
-                            <div className="mt-2 bg-white/95 px-3 py-1 sm:px-4 sm:py-2 rounded-xl border-4 border-[var(--sfc-red)] text-[var(--sfc-red)] font-pixel text-xs sm:text-base text-center whitespace-pre-wrap shadow-lg">
+                            <div className="mt-2 bg-white/95 px-4 py-2 rounded-xl border-2 border-terracotta text-terracotta font-rounded text-sm sm:text-base text-center whitespace-pre-wrap shadow-md">
                               {errorMessage}
                             </div>
                           )}
@@ -979,9 +1075,8 @@
                       <button 
                         onClick={() => clearCanvas(gameState)}
                         disabled={feedback !== null}
-                        className="bg-[var(--sfc-green)] text-white font-pixel py-3 px-6 sm:px-8 rounded-full shadow-[0_6px_0_#006400] active:translate-y-1 active:shadow-none flex items-center gap-2 sm:gap-3 text-base sm:text-xl transition-all"
+                        className="bg-gray-300 text-gray-700 font-rounded py-3 px-6 sm:px-8 rounded-full shadow-md active:translate-y-1 active:shadow-sm flex items-center gap-2 sm:gap-3 text-base sm:text-lg transition-all"
                       >
-                        <span className="bg-white text-[var(--sfc-green)] rounded-full w-6 h-6 sm:w-8 sm:h-8 flex items-center justify-center text-xs font-bold">Y</span> 
                         {gameState === 'PRACTICE' ? 'もういちど' : 'けす'}
                       </button>
                       
@@ -989,17 +1084,15 @@
                         <button 
                           onClick={checkWriting}
                           disabled={feedback !== null}
-                          className="bg-[var(--sfc-red)] text-white font-pixel py-3 px-6 sm:px-8 rounded-full shadow-[0_6px_0_#8B0000] active:translate-y-1 active:shadow-none flex items-center gap-2 sm:gap-3 text-base sm:text-xl transition-all"
+                          className="bg-terracotta text-white font-rounded py-3 px-6 sm:px-10 rounded-full shadow-md active:translate-y-1 active:shadow-sm flex items-center gap-2 sm:gap-3 text-base sm:text-xl transition-all"
                         >
-                          <span className="bg-white text-[var(--sfc-red)] rounded-full w-6 h-6 sm:w-8 sm:h-8 flex items-center justify-center text-xs font-bold">A</span> 
                           できた！
                         </button>
                       ) : (
                         <button 
                           onClick={() => goToNextQuestion('WRITE')}
-                          className="bg-[var(--sfc-blue)] text-white font-pixel py-3 px-6 sm:px-8 rounded-full shadow-[0_6px_0_#000080] active:translate-y-1 active:shadow-none flex items-center gap-2 sm:gap-3 text-base sm:text-xl transition-all"
+                          className="bg-sage text-white font-rounded py-3 px-6 sm:px-10 rounded-full shadow-md active:translate-y-1 active:shadow-sm flex items-center gap-2 sm:gap-3 text-base sm:text-xl transition-all"
                         >
-                          <span className="bg-white text-[var(--sfc-blue)] rounded-full w-6 h-6 sm:w-8 sm:h-8 flex items-center justify-center text-xs font-bold">A</span> 
                           つぎへ
                         </button>
                       )}
@@ -1009,18 +1102,18 @@
 
                 {gameState === 'RESULT' && (
                   <div className="text-center flex flex-col items-center justify-center h-full w-full">
-                    <h2 className="font-pixel text-3xl sm:text-4xl font-bold mb-8">けっか はっぴょう</h2>
-                    <p className="text-[6rem] sm:text-[8rem] font-bold text-[var(--sfc-red)] mb-8 leading-none drop-shadow-md">
-                      {score} <span className="text-3xl sm:text-4xl text-gray-800">てん</span>
+                    <h2 className="font-rounded text-3xl sm:text-4xl font-bold mb-8 text-bluegrey border-b-2 border-sage pb-2">けっか はっぴょう</h2>
+                    <p className="text-[6rem] sm:text-[8rem] font-bold text-terracotta mb-8 leading-none drop-shadow-sm">
+                      {score} <span className="text-3xl sm:text-4xl text-bluegrey">てん</span>
                     </p>
-                    <p className="font-pixel text-xl sm:text-2xl mb-12 text-gray-600">
+                    <p className="font-rounded text-xl sm:text-2xl mb-12 text-sage font-bold">
                       {score === questions.length ? 'パーフェクト！すごいぞ！' : 'よくがんばったね！'}
                     </p>
                     <button 
                       onClick={() => setGameState('UNIT_SELECT')}
-                      className="bg-gray-800 text-white font-pixel px-8 py-4 rounded-full shadow-[0_6px_0_#000] active:translate-y-1 active:shadow-none text-xl"
+                      className="bg-bluegrey text-white font-rounded px-8 py-4 rounded-full shadow-md active:translate-y-1 active:shadow-sm text-xl"
                     >
-                      メニューにもどる
+                      ノートをとじる
                     </button>
                   </div>
                 )}
