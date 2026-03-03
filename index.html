@@ -69,7 +69,7 @@
       transform: translateX(-50%) rotate(-2deg);
       width: 80px;
       height: 28px;
-      background-color: rgba(129, 178, 154, 0.6); /* セージグリーン半透明 */
+      background-color: rgba(129, 178, 154, 0.6);
       box-shadow: 0 1px 2px rgba(0,0,0,0.1);
       z-index: 10;
       border-left: 2px dotted rgba(255,255,255,0.6);
@@ -107,7 +107,6 @@
     .pin-yellow { background: radial-gradient(circle at 30% 30%, #fde047, #F2CC8F); }
     .pin-green { background: radial-gradient(circle at 30% 30%, #86efac, #81B29A); }
 
-    /* ノートが開くようなフェードアニメーション */
     @keyframes openNote {
       0% { transform: translateY(20px); opacity: 0; }
       100% { transform: translateY(0); opacity: 1; }
@@ -295,9 +294,7 @@
       });
     });
 
-    // 北欧風デザインのコンポーネント群
     const GradeBox = ({ grade, onClick }) => {
-      // 学年ごとにピンの色とテープの傾きを変える
       const pinColors = ['', 'pin-blue', 'pin-yellow', 'pin-green', '', 'pin-blue'];
       const pinClass = pinColors[grade - 1] || '';
       const tapeRotations = ['rotate-[-3deg]', 'rotate-[2deg]', 'rotate-[-1deg]', 'rotate-[4deg]', 'rotate-[-2deg]', 'rotate-[1deg]'];
@@ -314,7 +311,6 @@
       );
     };
 
-    // ★修正: isSelected を受け取り、選択状態の見た目を変更できるようにした
     const UnitNote = ({ grade, title, onClick, isSelected }) => {
       const tapeClasses = ['masking-tape', 'masking-tape-terracotta', 'masking-tape-mustard'];
       const tapeClass = tapeClasses[grade % 3];
@@ -343,7 +339,6 @@
     const App = () => {
       const [gameState, setGameState] = useState('TITLE'); 
       const [selectedGrade, setSelectedGrade] = useState(1);
-      // ★修正: selectedUnit を配列に変更し、複数選択に対応
       const [selectedUnits, setSelectedUnits] = useState([]);
       const [questions, setQuestions] = useState([]);
       const [currentIndex, setCurrentIndex] = useState(0);
@@ -357,6 +352,9 @@
       const [errorMessage, setErrorMessage] = useState('');
       const [isSettingsOpen, setIsSettingsOpen] = useState(false);
       
+      // ★ミスしたかを記録するステート
+      const [hasMistaked, setHasMistaked] = useState(false);
+      
       const bgCanvasRef = useRef(null);
       const drawCanvasRef = useRef(null);
       const inputRef = useRef(null);
@@ -364,7 +362,12 @@
       const pathsRef = useRef([]);
       const currentPathRef = useRef([]);
 
-      // ★修正: 選択された複数の単元の問題データを合体してシャッフルするように変更
+      // ★スコアをローカルストレージに保存する関数
+      const addScoreToLocal = () => {
+        const currentScore = parseInt(localStorage.getItem('gogo_drill_score') || '0', 10);
+        localStorage.setItem('gogo_drill_score', currentScore + 1);
+      };
+
       const startGame = (mode) => {
         let combinedQuestions = [];
         selectedUnits.forEach(unit => {
@@ -382,6 +385,7 @@
         setQuestions(shuffled);
         setCurrentIndex(0);
         setScore(0);
+        setHasMistaked(false);
         setGameState(mode);
         setFeedback(null);
         setErrorMessage('');
@@ -396,6 +400,7 @@
         setUserInput('');
         pathsRef.current = [];
         currentPathRef.current = [];
+        setHasMistaked(false);
         
         if (currentIndex + 1 < questions.length) {
           setCurrentIndex(i => i + 1);
@@ -408,14 +413,12 @@
         }
       };
 
-      // ★修正: 学年選択時に選択中の単元をリセットする
       const selectGrade = (grade) => {
         setSelectedGrade(grade);
         setSelectedUnits([]);
         setGameState('UNIT_SELECT');
       };
 
-      // ★追加: 単元の選択・解除を切り替える処理
       const toggleUnit = (unit) => {
         setSelectedUnits(prev => 
           prev.includes(unit) 
@@ -424,7 +427,6 @@
         );
       };
 
-      // ★修正: 選択を決定してメニュー画面へ進む処理
       const decideUnits = () => {
         if (selectedUnits.length === 0) {
           alert('たんげんを 1つ以上 えらんでね！');
@@ -484,15 +486,21 @@
         
         if (isCorrect) {
           setFeedback('⭕️');
-          setScore(s => s + 1);
+          if (!hasMistaked) {
+            setScore(s => s + 1);
+            addScoreToLocal(); // ★一発正解時のみ全体スコア加算
+          }
           setTimeout(() => {
             goToNextQuestion('READ');
           }, 1500);
         } else {
           setFeedback('❌');
+          setHasMistaked(true); // ★ミス記録
           setErrorMessage(`せいかいは「${currentQ.y}」だよ！`);
           setTimeout(() => {
-            goToNextQuestion('READ');
+            setFeedback(null);
+            setErrorMessage('');
+            setUserInput('');
           }, 2500);
         }
       };
@@ -529,12 +537,11 @@
         const bgCtx = bgCanvas.getContext('2d', { willReadFrequently: true });
         bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
         
-        // 方眼紙風背景（薄い緑）
         bgCtx.fillStyle = '#ffffff';
         bgCtx.fillRect(0, 0, bgCanvas.width, bgCanvas.height);
 
         bgCtx.save();
-        bgCtx.strokeStyle = '#81B29A'; // sage green
+        bgCtx.strokeStyle = '#81B29A'; 
         bgCtx.globalAlpha = 0.5;
         bgCtx.lineWidth = 2;
         bgCtx.setLineDash([8, 8]);
@@ -550,7 +557,7 @@
           bgCtx.font = `340px "UD Digi Kyokasho N-B", "UD デジタル 教科書体 N-B", "Klee One", serif`;
           bgCtx.textAlign = 'center';
           bgCtx.textBaseline = 'middle';
-          bgCtx.fillStyle = 'rgba(61, 64, 91, 0.1)'; // bluegrey (薄く)
+          bgCtx.fillStyle = 'rgba(61, 64, 91, 0.1)'; 
           bgCtx.fillText(questions[currentIndex].k, bgCanvas.width / 2, bgCanvas.height / 2);
         }
       };
@@ -580,7 +587,7 @@
         ctx.lineWidth = penSize;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.strokeStyle = '#3D405B'; // bluegrey
+        ctx.strokeStyle = '#3D405B';
         ctx.stroke();
       };
 
@@ -594,7 +601,7 @@
         ctx.lineWidth = penSize;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.strokeStyle = '#3D405B'; // bluegrey
+        ctx.strokeStyle = '#3D405B';
         ctx.stroke();
       };
 
@@ -613,7 +620,6 @@
 
         let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
         let totalPoints = 0;
-        
         const halfPen = penSize / 2;
 
         pathsRef.current.forEach(path => {
@@ -646,7 +652,6 @@
         const effectiveW = Math.max(userW, 10); 
         const effectiveH = Math.max(userH, 10);
         let scale = TARGET_SIZE / Math.max(effectiveW, effectiveH);
-        
         if (scale > 10) scale = 1;
 
         const normalizedPaths = pathsRef.current.map(path => {
@@ -738,12 +743,16 @@
         
         if (isCorrect) {
           setFeedback('⭕️');
-          setScore(s => s + 1);
+          if (!hasMistaked) {
+            setScore(s => s + 1);
+            addScoreToLocal(); // ★一発正解時のみ全体スコア加算
+          }
           setTimeout(() => {
             goToNextQuestion('WRITE');
           }, 1500);
         } else {
           setFeedback('❌');
+          setHasMistaked(true); // ★ミス記録
           if (!isStrokeCorrect) {
             setErrorMessage(`かくすう が ちがうよ！\n(せいかいは ${targetStrokeCount} かく)`);
           } else {
@@ -768,21 +777,33 @@
         }
       };
 
-      // 選択した単元名をメニューで表示するための処理
       const displayUnitName = selectedUnits.length === 1 
         ? selectedUnits[0] 
         : `${selectedUnits[0]} など ${selectedUnits.length}つのノート`;
+
+      // ★ポータルに戻る処理
+      const backToPortal = () => {
+        window.location.href = 'index.html';
+      };
 
       return (
         <div className="w-full h-full flex flex-col items-center justify-center relative overflow-hidden bg-cork">
           
           {(gameState === 'TITLE' || gameState === 'UNIT_SELECT') && (
-            <button 
-              onClick={() => setIsSettingsOpen(true)}
-              className="absolute top-4 right-4 sm:top-6 sm:right-6 bg-white/80 text-bluegrey w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center text-2xl sm:text-3xl shadow-sm hover:shadow-md transition-all z-40 border border-gray-200"
-            >
-              ⚙️
-            </button>
+            <>
+              <button 
+                onClick={backToPortal}
+                className="absolute top-4 left-4 sm:top-6 sm:left-6 bg-white/90 text-bluegrey px-4 py-2 rounded-full font-bold shadow-sm hover:shadow-md transition-all z-40 border border-gray-200 text-sm sm:text-base"
+              >
+                ← ドリルにもどる
+              </button>
+              <button 
+                onClick={() => setIsSettingsOpen(true)}
+                className="absolute top-4 right-4 sm:top-6 sm:right-6 bg-white/80 text-bluegrey w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center text-2xl sm:text-3xl shadow-sm hover:shadow-md transition-all z-40 border border-gray-200"
+              >
+                ⚙️
+              </button>
+            </>
           )}
 
           {isSettingsOpen && (
@@ -862,25 +883,19 @@
             </div>
           )}
 
-          {/* ★修正: 複数選択対応のUI */}
           {gameState === 'UNIT_SELECT' && (
             <div className="w-full h-full flex flex-col items-center relative">
-              
-              {/* ヘッダー部分 */}
               <div className="w-full flex-none pt-4 px-4 flex flex-col items-center">
                 <div className="w-full max-w-4xl flex flex-col sm:flex-row justify-between items-center mb-4 gap-4 bg-paper/90 p-4 rounded-lg shadow-sm border border-white">
                   <button onClick={() => setGameState('TITLE')} className="font-rounded text-bluegrey/70 underline text-lg hover:text-bluegrey">← がくねんをえらびなおす</button>
                   <h2 className="font-rounded text-2xl font-bold text-bluegrey">{selectedGrade}ねんせい の ノート</h2>
                 </div>
-                
-                {/* 複数選択の補助ボタン */}
                 <div className="w-full max-w-4xl flex justify-end gap-6 px-2 mb-2">
                   <button onClick={() => setSelectedUnits(Object.keys(KANJI_DATA[selectedGrade]))} className="font-rounded text-sm font-bold text-sage underline hover:text-green-700 transition-colors">すべてえらぶ</button>
                   <button onClick={() => setSelectedUnits([])} className="font-rounded text-sm font-bold text-terracotta underline hover:text-red-700 transition-colors">ぜんぶけす</button>
                 </div>
               </div>
               
-              {/* スクロール領域（決定ボタンに隠れないように余白確保） */}
               <div className="w-full flex-1 overflow-y-auto px-4 pb-32">
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 w-full max-w-4xl mx-auto">
                   {Object.keys(KANJI_DATA[selectedGrade]).map(unit => (
@@ -895,7 +910,6 @@
                 </div>
               </div>
 
-              {/* 決定ボタン（フローティング） */}
               {selectedUnits.length > 0 && (
                 <div className="absolute bottom-6 w-full flex justify-center animate-open-note z-10 px-4 pointer-events-none">
                   <button 
@@ -906,7 +920,6 @@
                   </button>
                 </div>
               )}
-
             </div>
           )}
 
