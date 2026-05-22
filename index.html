@@ -553,7 +553,6 @@
         bgCtx.restore();
 
         if (currentState === 'PRACTICE') {
-          // ★フォント指定を「UDデジタル教科書体」最優先に変更
           bgCtx.font = `340px "UD デジタル 教科書体 N-B", "UD Digi Kyokasho N-B", "Klee One", serif`;
           bgCtx.textAlign = 'center';
           bgCtx.textBaseline = 'middle';
@@ -645,37 +644,24 @@
 
         const userW = maxX - minX;
         const userH = maxY - minY;
-        const userCx = minX + userW / 2;
-        const userCy = minY + userH / 2;
+        
+        // ★ チート対策1: 字が小さすぎる（適当な点や短い線）場合は弾く
+        const isTooSmall = Math.max(userW, userH) < 100;
 
-        const TARGET_SIZE = 340; 
-        const effectiveW = Math.max(userW, 10); 
-        const effectiveH = Math.max(userH, 10);
-        let scale = TARGET_SIZE / Math.max(effectiveW, effectiveH);
-        if (scale > 10) scale = 1;
-
-        const normalizedPaths = pathsRef.current.map(path => {
-          return path.map(pt => {
-            return {
-              x: (pt.x - userCx) * scale + (width / 2),
-              y: (pt.y - userCy) * scale + (height / 2)
-            };
-          });
-        });
+        // ★ チート対策2: 自動拡大・中心合わせをやめ、書いたそのままの場所・大きさで判定する
+        const normalizedPaths = pathsRef.current;
 
         const targetCanvas = document.createElement('canvas');
         targetCanvas.width = width;
         targetCanvas.height = height;
         const targetCtx = targetCanvas.getContext('2d', { willReadFrequently: true });
         
-        // ★フォント指定を「UDデジタル教科書体」最優先に変更
         targetCtx.font = `340px "UD デジタル 教科書体 N-B", "UD Digi Kyokasho N-B", "Klee One", serif`;
         targetCtx.textAlign = 'center';
         targetCtx.textBaseline = 'middle';
         targetCtx.fillStyle = '#FF0000';
         targetCtx.fillText(questions[currentIndex].k, width / 2, height / 2);
         
-        // ★厳しすぎた判定の緩和（5 -> 10へ広げる）
         targetCtx.lineWidth = 10;
         targetCtx.strokeStyle = '#FF0000';
         targetCtx.strokeText(questions[currentIndex].k, width / 2, height / 2);
@@ -687,8 +673,8 @@
         userCanvas.height = height;
         const userCtx = userCanvas.getContext('2d', { willReadFrequently: true });
         
-        // ★厳しすぎた判定の緩和（30 -> 45へ太くする）
-        userCtx.lineWidth = 45; 
+        // ★絶対座標での比較になるため、多少の指のズレを許容するよう少し太くする
+        userCtx.lineWidth = 55; 
         userCtx.lineCap = 'round';
         userCtx.lineJoin = 'round';
         userCtx.strokeStyle = '#000000';
@@ -729,7 +715,6 @@
         const coverRate = targetPixelCount === 0 ? 0 : coveredPixelCount / targetPixelCount;
         const overdrawRatio = targetPixelCount === 0 ? 0 : userPixelCount / targetPixelCount;
         
-        // ★なぞりすぎ（チート）を防ぐため厳しめに設定
         const isNotCheating = overdrawRatio < 1.5;
         
         const userStrokeCount = pathsRef.current.length;
@@ -738,7 +723,7 @@
 
         // ★3段階評価の境界値
         let t3 = 0.75;
-        let t2 = 0.60;
+        let t2 = 0.65; 
         let t1 = 0.45;
 
         // 画数が少ないと難易度が上がるための調整
@@ -757,7 +742,7 @@
         let earnedPoints = 0;
         let feedbackMark = '';
 
-        if (isStrokeCorrect && isNotCheating) {
+        if (isStrokeCorrect && isNotCheating && !isTooSmall) {
           if (coverRate >= t3) {
             earnedPoints = 3;
             feedbackMark = '💮';
@@ -785,10 +770,12 @@
           setHasMistaked(true); 
           if (!isStrokeCorrect) {
             setErrorMessage(`かくすう が ちがうよ！\n(せいかいは ${targetStrokeCount} かく)`);
+          } else if (isTooSmall) {
+            setErrorMessage(`じ が ちいさすぎるよ！\nわくの なかに おおきく かこう。`);
           } else if (!isNotCheating) {
             setErrorMessage(`なんども なぞっては ダメだよ！\nいっかいで きれいに かこう。`);
           } else {
-            setErrorMessage(`おしい！かたちが ちがうかも。\nもう少し ていねいに なぞってみよう。`);
+            setErrorMessage(`おしい！かたち や いち が ちがうかも。\nじゅうじの せん に あわせて かいてみよう。`);
           }
           
           const bgCanvas = bgCanvasRef.current;
