@@ -645,10 +645,9 @@
         const userW = maxX - minX;
         const userH = maxY - minY;
         
-        // ★ チート対策1: 字が小さすぎる（適当な点や短い線）場合は弾く
+        // ★ 小さすぎる文字は弾く
         const isTooSmall = Math.max(userW, userH) < 100;
 
-        // ★ チート対策2: 自動拡大・中心合わせをやめ、書いたそのままの場所・大きさで判定する
         const normalizedPaths = pathsRef.current;
 
         const targetCanvas = document.createElement('canvas');
@@ -662,7 +661,8 @@
         targetCtx.fillStyle = '#FF0000';
         targetCtx.fillText(questions[currentIndex].k, width / 2, height / 2);
         
-        targetCtx.lineWidth = 10;
+        // ★ お手本の線を少し太くし、カバーしやすくする
+        targetCtx.lineWidth = 15;
         targetCtx.strokeStyle = '#FF0000';
         targetCtx.strokeText(questions[currentIndex].k, width / 2, height / 2);
 
@@ -673,8 +673,8 @@
         userCanvas.height = height;
         const userCtx = userCanvas.getContext('2d', { willReadFrequently: true });
         
-        // ★絶対座標での比較になるため、多少の指のズレを許容するよう少し太くする
-        userCtx.lineWidth = 55; 
+        // ★ 子供の指書きブレを許容するため、内部判定用の線を太くする
+        userCtx.lineWidth = 40; 
         userCtx.lineCap = 'round';
         userCtx.lineJoin = 'round';
         userCtx.strokeStyle = '#000000';
@@ -715,7 +715,8 @@
         const coverRate = targetPixelCount === 0 ? 0 : coveredPixelCount / targetPixelCount;
         const overdrawRatio = targetPixelCount === 0 ? 0 : userPixelCount / targetPixelCount;
         
-        const isNotCheating = overdrawRatio < 1.5;
+        // ★「なぞりすぎ」の判定を大幅に緩和し、正常な文字が弾かれないようにする
+        const isNotCheating = overdrawRatio < 3.0;
         
         const userStrokeCount = pathsRef.current.length;
         const targetStrokeCount = questions[currentIndex].stroke;
@@ -773,7 +774,7 @@
           } else if (isTooSmall) {
             setErrorMessage(`じ が ちいさすぎるよ！\nわくの なかに おおきく かこう。`);
           } else if (!isNotCheating) {
-            setErrorMessage(`なんども なぞっては ダメだよ！\nいっかいで きれいに かこう。`);
+            setErrorMessage(`せん が ながすぎるかも。\nきれいな かたち を いしきしてね。`);
           } else {
             setErrorMessage(`おしい！かたち や いち が ちがうかも。\nじゅうじの せん に あわせて かいてみよう。`);
           }
