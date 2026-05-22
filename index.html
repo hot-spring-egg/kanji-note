@@ -19,7 +19,7 @@
           },
           fontFamily: {
             rounded: ['"M PLUS Rounded 1c"', 'sans-serif'],
-            kyokasho: ['"UD Digi Kyokasho N-B"', '"UD デジタル 教科書体 N-B"', '"Klee One"', 'serif'],
+            kyokasho: ['"UD デジタル 教科書体 N-B"', '"UD Digi Kyokasho N-B"', '"Klee One"', 'serif'],
           }
         }
       }
@@ -31,7 +31,7 @@
   
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎒</text></svg>">
+  <link rel="icon" href="favicon.png">
   <link href="https://fonts.googleapis.com/css2?family=Klee+One:wght@600&family=M+PLUS+Rounded+1c:wght@500;700&display=swap" rel="stylesheet">
   
   <style>
@@ -338,6 +338,7 @@
 
     const App = () => {
       const [gameState, setGameState] = useState('TITLE'); 
+      const [currentMode, setCurrentMode] = useState('READ');
       const [selectedGrade, setSelectedGrade] = useState(1);
       const [selectedUnits, setSelectedUnits] = useState([]);
       const [questions, setQuestions] = useState([]);
@@ -348,8 +349,8 @@
       const [isDrawing, setIsDrawing] = useState(false);
       
       const [penSize, setPenSize] = useState(35);
-      const [errorMessage, setErrorMessage] = useState('');
       const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+      const [errorMessage, setErrorMessage] = useState('');
       
       const [hasMistaked, setHasMistaked] = useState(false);
       
@@ -359,6 +360,11 @@
 
       const pathsRef = useRef([]);
       const currentPathRef = useRef([]);
+
+      const addScoreToLocal = (points = 1) => {
+        const currentScore = parseInt(localStorage.getItem('gogo_drill_score') || '0', 10);
+        localStorage.setItem('gogo_drill_score', currentScore + points);
+      };
 
       const startGame = (mode) => {
         let combinedQuestions = [];
@@ -379,6 +385,7 @@
         setScore(0);
         setHasMistaked(false);
         setGameState(mode);
+        setCurrentMode(mode);
         setFeedback(null);
         setErrorMessage('');
         setUserInput('');
@@ -427,7 +434,7 @@
         setGameState('INSERTING');
         setTimeout(() => {
           setGameState('MENU');
-        }, 800);
+        }, 1200);
       };
 
       const renderQuestionText = (mode) => {
@@ -460,7 +467,7 @@
                   {feedback}
                 </span>
                 {errorMessage && (
-                  <div className="mt-2 bg-white/95 px-4 py-2 rounded-xl border-4 border-terracotta text-terracotta font-rounded text-sm sm:text-base text-center whitespace-pre-wrap shadow-lg">
+                  <div className={`mt-2 bg-white/95 px-4 py-2 rounded-xl border-4 font-rounded text-sm sm:text-base text-center whitespace-pre-wrap shadow-lg ${feedback === '❌' ? 'border-terracotta text-terracotta' : 'border-sage text-sage'}`}>
                     {errorMessage}
                   </div>
                 )}
@@ -480,6 +487,7 @@
           setFeedback('⭕️');
           if (!hasMistaked) {
             setScore(s => s + 1);
+            addScoreToLocal(1);
           }
           setTimeout(() => {
             goToNextQuestion('READ');
@@ -545,7 +553,8 @@
         bgCtx.restore();
 
         if (currentState === 'PRACTICE') {
-          bgCtx.font = `340px "UD Digi Kyokasho N-B", "UD デジタル 教科書体 N-B", "Klee One", serif`;
+          // ★フォント指定を「UDデジタル教科書体」最優先に変更
+          bgCtx.font = `340px "UD デジタル 教科書体 N-B", "UD Digi Kyokasho N-B", "Klee One", serif`;
           bgCtx.textAlign = 'center';
           bgCtx.textBaseline = 'middle';
           bgCtx.fillStyle = 'rgba(61, 64, 91, 0.1)'; 
@@ -605,7 +614,6 @@
         }
       };
 
-      // ★手書き判定ロジックの厳格化
       const checkWriting = () => {
         const width = CANVAS_SIZE;
         const height = CANVAS_SIZE;
@@ -660,14 +668,15 @@
         targetCanvas.height = height;
         const targetCtx = targetCanvas.getContext('2d', { willReadFrequently: true });
         
-        targetCtx.font = `340px "UD Digi Kyokasho N-B", "UD デジタル 教科書体 N-B", "Klee One", serif`;
+        // ★フォント指定を「UDデジタル教科書体」最優先に変更
+        targetCtx.font = `340px "UD デジタル 教科書体 N-B", "UD Digi Kyokasho N-B", "Klee One", serif`;
         targetCtx.textAlign = 'center';
         targetCtx.textBaseline = 'middle';
         targetCtx.fillStyle = '#FF0000';
         targetCtx.fillText(questions[currentIndex].k, width / 2, height / 2);
         
-        // ★ターゲットの線を細くし、より正確な輪郭を判定基準にする
-        targetCtx.lineWidth = 5; 
+        // ★厳しすぎた判定の緩和（5 -> 10へ広げる）
+        targetCtx.lineWidth = 10;
         targetCtx.strokeStyle = '#FF0000';
         targetCtx.strokeText(questions[currentIndex].k, width / 2, height / 2);
 
@@ -678,8 +687,8 @@
         userCanvas.height = height;
         const userCtx = userCanvas.getContext('2d', { willReadFrequently: true });
         
-        // ★ユーザーの描画判定線を細くし、適当な塗りつぶしによるチートを防ぐ
-        userCtx.lineWidth = 30; 
+        // ★厳しすぎた判定の緩和（30 -> 45へ太くする）
+        userCtx.lineWidth = 45; 
         userCtx.lineCap = 'round';
         userCtx.lineJoin = 'round';
         userCtx.strokeStyle = '#000000';
@@ -718,43 +727,66 @@
         }
 
         const coverRate = targetPixelCount === 0 ? 0 : coveredPixelCount / targetPixelCount;
+        const overdrawRatio = targetPixelCount === 0 ? 0 : userPixelCount / targetPixelCount;
         
-        // ★チート判定：余分な塗りつぶしペナルティを厳格化
-        // ユーザーが描いた線が、ターゲットの面積に対してどれだけ大きいかを計算
-        // 以前は3.5倍まで許容していたが、今回は線を細くしたため1.8倍程度に厳格化
-        const overdrawRatio = userPixelCount / (targetPixelCount || 1);
-        const isNotCheating = overdrawRatio < 1.8; 
-
+        // ★なぞりすぎ（チート）を防ぐため厳しめに設定
+        const isNotCheating = overdrawRatio < 1.5;
+        
         const userStrokeCount = pathsRef.current.length;
         const targetStrokeCount = questions[currentIndex].stroke;
         const isStrokeCorrect = userStrokeCount === targetStrokeCount;
 
-        // ★ストロークごとのバウンディングボックスによる「ただの直線」チェック
-        // 適当に斜め線を引いただけの場合、X方向とY方向の広がりが均等になりがちだが
-        // 全体のカバー率とオーバードロー率で弾けるため、今回はCoverRateを高く設定する方針を取る
-        
-        // 判定基準: ユーザーの線が細くなったため、CoverRateの要求水準を少し下げるが、
-        // 塗りつぶし(overdraw)を厳しくすることで「形」を正しく評価する。
-        const requiredCoverRate = 0.55; 
+        // ★3段階評価の境界値
+        let t3 = 0.75;
+        let t2 = 0.60;
+        let t1 = 0.45;
 
-        const isCorrect = isStrokeCorrect && (coverRate >= requiredCoverRate) && isNotCheating; 
+        // 画数が少ないと難易度が上がるための調整
+        if (targetStrokeCount <= 2) {
+          t3 -= 0.15; t2 -= 0.15; t1 -= 0.15; 
+        } else if (targetStrokeCount <= 4) {
+          t3 -= 0.10; t2 -= 0.10; t1 -= 0.10; 
+        } else if (targetStrokeCount <= 6) {
+          t3 -= 0.05; t2 -= 0.05; t1 -= 0.05; 
+        }
         
-        if (isCorrect) {
-          setFeedback('⭕️');
+        t1 = Math.max(0.25, t1);
+        t2 = Math.max(t1 + 0.1, t2);
+        t3 = Math.max(t2 + 0.1, t3);
+
+        let earnedPoints = 0;
+        let feedbackMark = '';
+
+        if (isStrokeCorrect && isNotCheating) {
+          if (coverRate >= t3) {
+            earnedPoints = 3;
+            feedbackMark = '💮';
+          } else if (coverRate >= t2) {
+            earnedPoints = 2;
+            feedbackMark = '⭕️';
+          } else if (coverRate >= t1) {
+            earnedPoints = 1;
+            feedbackMark = '👌';
+          }
+        }
+        
+        if (earnedPoints > 0) {
+          setFeedback(feedbackMark);
+          setErrorMessage(`${earnedPoints} てん！`);
           if (!hasMistaked) {
-            setScore(s => s + 1);
+            setScore(s => s + earnedPoints);
+            addScoreToLocal(earnedPoints); 
           }
           setTimeout(() => {
             goToNextQuestion('WRITE');
           }, 1500);
         } else {
           setFeedback('❌');
-          setHasMistaked(true);
-          
+          setHasMistaked(true); 
           if (!isStrokeCorrect) {
             setErrorMessage(`かくすう が ちがうよ！\n(せいかいは ${targetStrokeCount} かく)`);
           } else if (!isNotCheating) {
-            setErrorMessage(`ぐちゃぐちゃ は ダメだよ！\nきれいな かたち を いしきしてね。`);
+            setErrorMessage(`なんども なぞっては ダメだよ！\nいっかいで きれいに かこう。`);
           } else {
             setErrorMessage(`おしい！かたちが ちがうかも。\nもう少し ていねいに なぞってみよう。`);
           }
@@ -762,7 +794,7 @@
           const bgCanvas = bgCanvasRef.current;
           if (bgCanvas) {
             const bgCtx = bgCanvas.getContext('2d');
-            bgCtx.font = `340px "UD Digi Kyokasho N-B", "UD デジタル 教科書体 N-B", "Klee One", serif`;
+            bgCtx.font = `340px "UD デジタル 教科書体 N-B", "UD Digi Kyokasho N-B", "Klee One", serif`;
             bgCtx.textAlign = 'center';
             bgCtx.textBaseline = 'middle';
             bgCtx.fillStyle = 'rgba(224, 122, 95, 0.3)'; // terracotta
@@ -773,7 +805,7 @@
             setFeedback(null);
             setErrorMessage('');
             setGameState('PRACTICE'); 
-          }, 3000);
+          }, 2500);
         }
       };
 
@@ -781,16 +813,30 @@
         ? selectedUnits[0] 
         : `${selectedUnits[0]} など ${selectedUnits.length}つのノート`;
 
+      const backToPortal = () => {
+        window.location.href = 'https://hot-spring-egg.github.io/ontama-drill/';
+      };
+
+      const maxPossibleScore = currentMode === 'READ' ? questions.length : questions.length * 3;
+
       return (
         <div className="w-full h-full flex flex-col items-center justify-center relative overflow-hidden bg-cork">
           
           {(gameState === 'TITLE' || gameState === 'UNIT_SELECT') && (
-            <button 
-              onClick={() => setIsSettingsOpen(true)}
-              className="absolute top-4 right-4 sm:top-6 sm:right-6 bg-white/80 text-bluegrey w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center text-2xl sm:text-3xl shadow-sm hover:shadow-md transition-all z-40 border border-gray-200"
-            >
-              ⚙️
-            </button>
+            <>
+              <button 
+                onClick={backToPortal}
+                className="absolute top-4 left-4 sm:top-6 sm:left-6 bg-white/90 text-bluegrey px-4 py-2 rounded-full font-bold shadow-sm hover:shadow-md transition-all z-40 border border-gray-200 text-sm sm:text-base"
+              >
+                ← ドリルにもどる
+              </button>
+              <button 
+                onClick={() => setIsSettingsOpen(true)}
+                className="absolute top-4 right-4 sm:top-6 sm:right-6 bg-white/80 text-bluegrey w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center text-2xl sm:text-3xl shadow-sm hover:shadow-md transition-all z-40 border border-gray-200"
+              >
+                ⚙️
+              </button>
+            </>
           )}
 
           {isSettingsOpen && (
@@ -798,7 +844,7 @@
               <div className="bg-paper p-6 sm:p-8 rounded-2xl shadow-2xl w-full max-w-md relative animate-pop-in border border-white">
                 <h2 className="font-rounded text-3xl font-bold mb-6 text-center text-bluegrey border-b-2 border-sage pb-2">せってい</h2>
                 
-                <div className="mb-8">
+                <div className="mb-10">
                   <p className="font-rounded text-bluegrey/80 mb-4 text-xl text-center">ペンの ふとさ</p>
                   <div className="flex justify-center gap-4 sm:gap-6">
                     {[
@@ -1036,11 +1082,11 @@
                       
                       {feedback && gameState === 'WRITE' && (
                         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-50">
-                          <span className={`text-[7rem] sm:text-[9rem] drop-shadow-md opacity-90 leading-none ${feedback === '⭕️' ? 'text-sage' : 'text-terracotta'}`}>
+                          <span className={`text-[7rem] sm:text-[9rem] drop-shadow-md opacity-90 leading-none ${feedback === '❌' ? 'text-terracotta' : 'text-sage'}`}>
                             {feedback}
                           </span>
                           {errorMessage && (
-                            <div className="mt-2 bg-white/95 px-4 py-2 rounded-xl border-2 border-terracotta text-terracotta font-rounded text-sm sm:text-base text-center whitespace-pre-wrap shadow-md">
+                            <div className={`mt-2 bg-white/95 px-4 py-2 rounded-xl border-4 font-rounded text-sm sm:text-base text-center whitespace-pre-wrap shadow-lg ${feedback === '❌' ? 'border-terracotta text-terracotta' : 'border-sage text-sage'}`}>
                               {errorMessage}
                             </div>
                           )}
@@ -1084,7 +1130,7 @@
                       {score} <span className="text-3xl sm:text-4xl text-bluegrey">てん</span>
                     </p>
                     <p className="font-rounded text-xl sm:text-2xl mb-12 text-sage font-bold">
-                      {score === questions.length ? 'パーフェクト！すごいぞ！' : 'よくがんばったね！'}
+                      {score === maxPossibleScore ? 'パーフェクト！すごいぞ！' : 'よくがんばったね！'}
                     </p>
                     <button 
                       onClick={() => setGameState('UNIT_SELECT')}
