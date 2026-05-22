@@ -31,7 +31,7 @@
   
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="icon" href="favicon.png">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎒</text></svg>">
   <link href="https://fonts.googleapis.com/css2?family=Klee+One:wght@600&family=M+PLUS+Rounded+1c:wght@500;700&display=swap" rel="stylesheet">
   
   <style>
@@ -348,11 +348,9 @@
       const [isDrawing, setIsDrawing] = useState(false);
       
       const [penSize, setPenSize] = useState(35);
-      const [difficulty, setDifficulty] = useState(0.60);
       const [errorMessage, setErrorMessage] = useState('');
       const [isSettingsOpen, setIsSettingsOpen] = useState(false);
       
-      // ★ミスしたかを記録するステート
       const [hasMistaked, setHasMistaked] = useState(false);
       
       const bgCanvasRef = useRef(null);
@@ -361,12 +359,6 @@
 
       const pathsRef = useRef([]);
       const currentPathRef = useRef([]);
-
-      // ★スコアをローカルストレージに保存する関数
-      const addScoreToLocal = () => {
-        const currentScore = parseInt(localStorage.getItem('gogo_drill_score') || '0', 10);
-        localStorage.setItem('gogo_drill_score', currentScore + 1);
-      };
 
       const startGame = (mode) => {
         let combinedQuestions = [];
@@ -435,7 +427,7 @@
         setGameState('INSERTING');
         setTimeout(() => {
           setGameState('MENU');
-        }, 1200);
+        }, 800);
       };
 
       const renderQuestionText = (mode) => {
@@ -488,14 +480,13 @@
           setFeedback('⭕️');
           if (!hasMistaked) {
             setScore(s => s + 1);
-            addScoreToLocal(); // ★一発正解時のみ全体スコア加算
           }
           setTimeout(() => {
             goToNextQuestion('READ');
           }, 1500);
         } else {
           setFeedback('❌');
-          setHasMistaked(true); // ★ミス記録
+          setHasMistaked(true); 
           setErrorMessage(`せいかいは「${currentQ.y}」だよ！`);
           setTimeout(() => {
             setFeedback(null);
@@ -614,6 +605,7 @@
         }
       };
 
+      // ★手書き判定ロジックの厳格化
       const checkWriting = () => {
         const width = CANVAS_SIZE;
         const height = CANVAS_SIZE;
@@ -674,7 +666,8 @@
         targetCtx.fillStyle = '#FF0000';
         targetCtx.fillText(questions[currentIndex].k, width / 2, height / 2);
         
-        targetCtx.lineWidth = 15;
+        // ★ターゲットの線を細くし、より正確な輪郭を判定基準にする
+        targetCtx.lineWidth = 5; 
         targetCtx.strokeStyle = '#FF0000';
         targetCtx.strokeText(questions[currentIndex].k, width / 2, height / 2);
 
@@ -685,7 +678,8 @@
         userCanvas.height = height;
         const userCtx = userCanvas.getContext('2d', { willReadFrequently: true });
         
-        userCtx.lineWidth = 90; 
+        // ★ユーザーの描画判定線を細くし、適当な塗りつぶしによるチートを防ぐ
+        userCtx.lineWidth = 30; 
         userCtx.lineCap = 'round';
         userCtx.lineJoin = 'round';
         userCtx.strokeStyle = '#000000';
@@ -724,39 +718,45 @@
         }
 
         const coverRate = targetPixelCount === 0 ? 0 : coveredPixelCount / targetPixelCount;
-        const isNotCheating = userPixelCount < targetPixelCount * 3.5;
+        
+        // ★チート判定：余分な塗りつぶしペナルティを厳格化
+        // ユーザーが描いた線が、ターゲットの面積に対してどれだけ大きいかを計算
+        // 以前は3.5倍まで許容していたが、今回は線を細くしたため1.8倍程度に厳格化
+        const overdrawRatio = userPixelCount / (targetPixelCount || 1);
+        const isNotCheating = overdrawRatio < 1.8; 
+
         const userStrokeCount = pathsRef.current.length;
         const targetStrokeCount = questions[currentIndex].stroke;
         const isStrokeCorrect = userStrokeCount === targetStrokeCount;
 
-        let finalDifficulty = difficulty;
-        if (targetStrokeCount <= 2) {
-          finalDifficulty -= 0.15; 
-        } else if (targetStrokeCount <= 4) {
-          finalDifficulty -= 0.10; 
-        } else if (targetStrokeCount <= 6) {
-          finalDifficulty -= 0.05; 
-        }
-        finalDifficulty = Math.max(0.30, finalDifficulty);
+        // ★ストロークごとのバウンディングボックスによる「ただの直線」チェック
+        // 適当に斜め線を引いただけの場合、X方向とY方向の広がりが均等になりがちだが
+        // 全体のカバー率とオーバードロー率で弾けるため、今回はCoverRateを高く設定する方針を取る
+        
+        // 判定基準: ユーザーの線が細くなったため、CoverRateの要求水準を少し下げるが、
+        // 塗りつぶし(overdraw)を厳しくすることで「形」を正しく評価する。
+        const requiredCoverRate = 0.55; 
 
-        const isCorrect = isStrokeCorrect && (coverRate >= finalDifficulty) && isNotCheating; 
+        const isCorrect = isStrokeCorrect && (coverRate >= requiredCoverRate) && isNotCheating; 
         
         if (isCorrect) {
           setFeedback('⭕️');
           if (!hasMistaked) {
             setScore(s => s + 1);
-            addScoreToLocal(); // ★一発正解時のみ全体スコア加算
           }
           setTimeout(() => {
             goToNextQuestion('WRITE');
           }, 1500);
         } else {
           setFeedback('❌');
-          setHasMistaked(true); // ★ミス記録
+          setHasMistaked(true);
+          
           if (!isStrokeCorrect) {
             setErrorMessage(`かくすう が ちがうよ！\n(せいかいは ${targetStrokeCount} かく)`);
+          } else if (!isNotCheating) {
+            setErrorMessage(`ぐちゃぐちゃ は ダメだよ！\nきれいな かたち を いしきしてね。`);
           } else {
-            setErrorMessage(`かたちが すこし ちがうみたい`);
+            setErrorMessage(`おしい！かたちが ちがうかも。\nもう少し ていねいに なぞってみよう。`);
           }
           
           const bgCanvas = bgCanvasRef.current;
@@ -773,7 +773,7 @@
             setFeedback(null);
             setErrorMessage('');
             setGameState('PRACTICE'); 
-          }, 2500);
+          }, 3000);
         }
       };
 
@@ -781,29 +781,16 @@
         ? selectedUnits[0] 
         : `${selectedUnits[0]} など ${selectedUnits.length}つのノート`;
 
-      // ★ポータルに戻る処理
-      const backToPortal = () => {
-        window.location.href = 'https://hot-spring-egg.github.io/ontama-drill/';
-      };
-
       return (
         <div className="w-full h-full flex flex-col items-center justify-center relative overflow-hidden bg-cork">
           
           {(gameState === 'TITLE' || gameState === 'UNIT_SELECT') && (
-            <>
-              <button 
-                onClick={backToPortal}
-                className="absolute top-4 left-4 sm:top-6 sm:left-6 bg-white/90 text-bluegrey px-4 py-2 rounded-full font-bold shadow-sm hover:shadow-md transition-all z-40 border border-gray-200 text-sm sm:text-base"
-              >
-                ← ドリルにもどる
-              </button>
-              <button 
-                onClick={() => setIsSettingsOpen(true)}
-                className="absolute top-4 right-4 sm:top-6 sm:right-6 bg-white/80 text-bluegrey w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center text-2xl sm:text-3xl shadow-sm hover:shadow-md transition-all z-40 border border-gray-200"
-              >
-                ⚙️
-              </button>
-            </>
+            <button 
+              onClick={() => setIsSettingsOpen(true)}
+              className="absolute top-4 right-4 sm:top-6 sm:right-6 bg-white/80 text-bluegrey w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center text-2xl sm:text-3xl shadow-sm hover:shadow-md transition-all z-40 border border-gray-200"
+            >
+              ⚙️
+            </button>
           )}
 
           {isSettingsOpen && (
@@ -830,29 +817,6 @@
                       >
                         <div className="bg-current rounded-full mb-1" style={{ width: p.size/2.5, height: p.size/2.5 }}></div>
                         <span className="font-rounded text-xs">{p.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="mb-10">
-                  <p className="font-rounded text-bluegrey/80 mb-4 text-xl text-center">はんていの きびしさ</p>
-                  <div className="flex justify-center gap-2 sm:gap-4">
-                    {[
-                      { rate: 0.45, label: 'かんたん' },
-                      { rate: 0.60, label: 'ふつう' },
-                      { rate: 0.75, label: 'むずかしい' }
-                    ].map(d => (
-                      <button
-                        key={d.rate}
-                        onClick={() => setDifficulty(d.rate)}
-                        className={`px-3 py-3 sm:px-4 sm:py-4 font-rounded text-sm sm:text-base rounded-xl transition-all ${
-                          difficulty === d.rate
-                            ? 'bg-sage text-white shadow-inner'
-                            : 'bg-white border border-gray-300 text-gray-500 hover:bg-gray-50'
-                        }`}
-                      >
-                        {d.label}
                       </button>
                     ))}
                   </div>
@@ -956,7 +920,7 @@
                       <button onClick={() => startGame('READ')} className="group flex flex-col items-center">
                         <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-3xl bg-mustard shadow-[0_6px_0_#d4a96a] group-active:translate-y-2 group-active:shadow-none transition-all flex items-center justify-center border-4 border-white mb-4 transform group-hover:scale-105">
                           <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
                           </svg>
                         </div>
                         <span className="font-rounded text-2xl font-bold text-bluegrey">よむ</span>
