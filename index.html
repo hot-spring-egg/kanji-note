@@ -294,6 +294,212 @@
       });
     });
 
+    // ==========================================
+    // 漢字の正誤判定エンジン（KanjiVG ベクターデータ方式）
+    // 「マイ漢字タウン」のストローク採点ロジックを移植。
+    // 画数・交差パターン・始点・終点・書き順を幾何的に照合し、
+    // 画数だけ合っていて形が違うものを正しく不正解にする。
+    // ==========================================
+    const KANJI_VG = {
+      CDN_URL: 'https://cdn.jsdelivr.net/gh/KanjiVG/kanjivg@master/kanji',
+      FETCH_TIMEOUT: 6000,
+      MAX_RETRIES: 3,
+      VIEWBOX_SIZE: 109,   // KanjiVG の SVG は 109x109
+      SAMPLE_INTERVAL: 2,  // パス上のサンプリング間隔
+    };
+
+    // 判定しきい値（正規化座標 0-1）
+    const STROKE_THRESHOLDS = {
+      START_POINT: 0.20,    // 始点の許容距離
+      END_POINT: 0.25,      // 終点の許容距離
+      ORDER_DISTANCE: 0.3,  // 書き順マッチングの許容距離
+      CROSS_COUNT_MIN: 3,   // これ未満の交差は点接触として無視
+    };
+
+    // 採点の重み（合計100点）
+    const GRADE_WEIGHTS = { START: 35, END: 35, ORDER: 30 };
+
+    // KanjiVG データのメモリキャッシュ（hex -> path d 文字列の配列）
+    const vgMemoryCache = new Map();
+
+    const vgHex = (char) => char.codePointAt(0).toString(16).padStart(5, '0');
+
+    const vgFetchWithTimeout = (url, timeout) => {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeout);
+      return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(id));
+    };
+
+    const vgFetchWithRetry = async (url, maxRetries, timeout) => {
+      let lastError;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          const res = await vgFetchWithTimeout(url, timeout);
+          if (res.ok) return res;
+          lastError = new Error('HTTP ' + res.status);
+        } catch (e) {
+          lastError = e;
+        }
+        if (attempt < maxRetries - 1) {
+          await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+        }
+      }
+      throw lastError;
+    };
+
+    // SVG テキストから path 要素の d 属性を抽出（KanjiVG は各画が1つの path）
+    const vgExtractPaths = (svgText) => {
+      const doc = new DOMParser().parseFromString(svgText, 'image/svg+xml');
+      return Array.from(doc.querySelectorAll('path'))
+        .map(p => p.getAttribute('d'))
+        .filter(Boolean);
+    };
+
+    // path d 文字列の配列 → 各画のサンプリング済み正規化座標に変換
+    const vgBuildStrokeData = (pathStrings) => {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      svg.appendChild(pathEl);
+      svg.setAttribute('width', '0');
+      svg.setAttribute('height', '0');
+      svg.style.position = 'absolute';
+      svg.style.left = '-9999px';
+      document.body.appendChild(svg);
+      try {
+        return pathStrings.map(d => {
+          pathEl.setAttribute('d', d);
+          const len = pathEl.getTotalLength();
+          const points = [];
+          for (let i = 0; i <= len; i += KANJI_VG.SAMPLE_INTERVAL) {
+            const pt = pathEl.getPointAtLength(i);
+            points.push({ x: pt.x / KANJI_VG.VIEWBOX_SIZE, y: pt.y / KANJI_VG.VIEWBOX_SIZE });
+          }
+          const endPt = pathEl.getPointAtLength(len);
+          points.push({ x: endPt.x / KANJI_VG.VIEWBOX_SIZE, y: endPt.y / KANJI_VG.VIEWBOX_SIZE });
+          const startPt = pathEl.getPointAtLength(0);
+          return {
+            s: { x: startPt.x / KANJI_VG.VIEWBOX_SIZE, y: startPt.y / KANJI_VG.VIEWBOX_SIZE },
+            e: { x: endPt.x / KANJI_VG.VIEWBOX_SIZE, y: endPt.y / KANJI_VG.VIEWBOX_SIZE },
+            points,
+          };
+        });
+      } finally {
+        document.body.removeChild(svg);
+      }
+    };
+
+    // 漢字1文字の KanjiVG ストロークデータを取得（メモリ→localStorage→ネットワーク）
+    const fetchKanjiVg = async (char) => {
+      const hex = vgHex(char);
+      if (vgMemoryCache.has(hex)) {
+        return vgBuildStrokeData(vgMemoryCache.get(hex));
+      }
+      try {
+        const cached = localStorage.getItem('kvg_' + hex);
+        if (cached) {
+          const arr = JSON.parse(cached);
+          vgMemoryCache.set(hex, arr);
+          return vgBuildStrokeData(arr);
+        }
+      } catch (e) { /* キャッシュ読み込み失敗は無視 */ }
+      const res = await vgFetchWithRetry(
+        KANJI_VG.CDN_URL + '/' + hex + '.svg',
+        KANJI_VG.MAX_RETRIES,
+        KANJI_VG.FETCH_TIMEOUT
+      );
+      const text = await res.text();
+      const pathStrings = vgExtractPaths(text);
+      vgMemoryCache.set(hex, pathStrings);
+      try { localStorage.setItem('kvg_' + hex, JSON.stringify(pathStrings)); } catch (e) { /* 容量超過は無視 */ }
+      return vgBuildStrokeData(pathStrings);
+    };
+
+    // 2線分が交差するか（外積の符号で判定）
+    const vgIsIntersecting = (p1, p2, p3, p4) => {
+      const crossA = (p3.x - p4.x) * (p1.y - p3.y) + (p3.y - p4.y) * (p3.x - p1.x);
+      const crossB = (p3.x - p4.x) * (p2.y - p3.y) + (p3.y - p4.y) * (p3.x - p2.x);
+      const crossC = (p1.x - p2.x) * (p3.y - p1.y) + (p1.y - p2.y) * (p1.x - p3.x);
+      const crossD = (p1.x - p2.x) * (p4.y - p1.y) + (p1.y - p2.y) * (p1.x - p4.x);
+      return crossC * crossD < 0 && crossA * crossB < 0;
+    };
+
+    // 2つの画の交差セグメント対の数（点接触と明確な突き抜けを区別するため）
+    const vgCountCrossings = (s1, s2) => {
+      if (!s1 || !s2 || s1.length < 2 || s2.length < 2) return 0;
+      let count = 0;
+      for (let i = 0; i < s1.length - 1; i++) {
+        for (let j = 0; j < s2.length - 1; j++) {
+          if (vgIsIntersecting(s1[i], s1[i + 1], s2[j], s2[j + 1])) count++;
+        }
+      }
+      return count;
+    };
+
+    // 2点間の距離スコア（0-1、1が完璧）
+    const vgDistanceScore = (u, t, threshold) =>
+      Math.max(0, 1 - Math.hypot(u.x - t.x, u.y - t.y) / threshold);
+
+    // ユーザーの手書きストロークを KanjiVG データと照合して 0-100 で採点
+    // userStrokes: [[{x,y}, ...], ...]（キャンバス座標）/ strokeData: KanjiVG 正規化データ
+    const gradeStrokes = (userStrokes, strokeData, canvasSize) => {
+      const expectedCount = strokeData.length;
+      const actualCount = userStrokes.length;
+
+      // ── 画数チェック（不一致は即0点）──
+      if (actualCount !== expectedCount) {
+        return { total: 0, strokeCountMatch: false, crossMatch: false, reason: 'stroke', expectedCount };
+      }
+
+      const normUser = userStrokes.map(s => s.map(p => ({ x: p.x / canvasSize, y: p.y / canvasSize })));
+
+      // ── 交差パターンチェック（不一致は即0点）──
+      for (let i = 0; i < expectedCount; i++) {
+        for (let j = i + 1; j < expectedCount; j++) {
+          const expectedCrossed = vgCountCrossings(strokeData[i].points, strokeData[j].points) >= STROKE_THRESHOLDS.CROSS_COUNT_MIN;
+          const actualCrossed = vgCountCrossings(normUser[i], normUser[j]) >= STROKE_THRESHOLDS.CROSS_COUNT_MIN;
+          if (expectedCrossed !== actualCrossed) {
+            return { total: 0, strokeCountMatch: true, crossMatch: false, reason: 'cross', expectedCount };
+          }
+        }
+      }
+
+      // ── 始点精度 ──
+      let startTotal = 0;
+      for (let i = 0; i < expectedCount; i++) {
+        startTotal += vgDistanceScore(normUser[i][0], strokeData[i].s, STROKE_THRESHOLDS.START_POINT);
+      }
+      const startScore = (startTotal / expectedCount) * GRADE_WEIGHTS.START;
+
+      // ── 終点精度 ──
+      let endTotal = 0;
+      for (let i = 0; i < expectedCount; i++) {
+        const u = normUser[i];
+        endTotal += vgDistanceScore(u[u.length - 1], strokeData[i].e, STROKE_THRESHOLDS.END_POINT);
+      }
+      const endScore = (endTotal / expectedCount) * GRADE_WEIGHTS.END;
+
+      // ── 書き順（各画の始点を最も近い正解画にマッチング）──
+      let orderCorrect = 0;
+      const usedTargets = new Set();
+      for (let i = 0; i < expectedCount; i++) {
+        const us = normUser[i][0];
+        let bestIdx = -1, bestDist = Infinity;
+        for (let j = 0; j < expectedCount; j++) {
+          if (usedTargets.has(j)) continue;
+          const d = Math.hypot(us.x - strokeData[j].s.x, us.y - strokeData[j].s.y);
+          if (d < bestDist) { bestDist = d; bestIdx = j; }
+        }
+        if (bestIdx >= 0 && bestDist < STROKE_THRESHOLDS.ORDER_DISTANCE) {
+          usedTargets.add(bestIdx);
+          if (bestIdx === i) orderCorrect++;
+        }
+      }
+      const orderScore = (orderCorrect / expectedCount) * GRADE_WEIGHTS.ORDER;
+
+      const total = Math.round(startScore + endScore + orderScore);
+      return { total, strokeCountMatch: true, crossMatch: true, reason: null, expectedCount };
+    };
+
     const GradeBox = ({ grade, onClick }) => {
       const pinColors = ['', 'pin-blue', 'pin-yellow', 'pin-green', '', 'pin-blue'];
       const pinClass = pinColors[grade - 1] || '';
@@ -353,13 +559,16 @@
       const [errorMessage, setErrorMessage] = useState('');
       
       const [hasMistaked, setHasMistaked] = useState(false);
-      
+      const [isJudging, setIsJudging] = useState(false);
+
       const bgCanvasRef = useRef(null);
       const drawCanvasRef = useRef(null);
       const inputRef = useRef(null);
 
       const pathsRef = useRef([]);
       const currentPathRef = useRef([]);
+      // 現在の問題の KanjiVG ストロークデータ（{ char, data }）
+      const strokeDataRef = useRef({ char: null, data: null });
 
       const addScoreToLocal = (points = 1) => {
         const currentScore = parseInt(localStorage.getItem('gogo_drill_score') || '0', 10);
@@ -524,6 +733,29 @@
         }
       }, [gameState, currentIndex, questions]);
 
+      // 現在の問題（と次の問題）の KanjiVG データを先読みして、判定を即時化する
+      useEffect(() => {
+        if (gameState !== 'WRITE' && gameState !== 'PRACTICE') return;
+        const q = questions[currentIndex];
+        if (!q) return;
+
+        let cancelled = false;
+        strokeDataRef.current = { char: q.k, data: null };
+        fetchKanjiVg(q.k)
+          .then(data => {
+            if (!cancelled && strokeDataRef.current.char === q.k) {
+              strokeDataRef.current = { char: q.k, data };
+            }
+          })
+          .catch(() => { /* 失敗時はピクセル方式にフォールバック */ });
+
+        // 次の問題を先読み（結果は破棄、キャッシュに乗せるだけ）
+        const next = questions[currentIndex + 1];
+        if (next) fetchKanjiVg(next.k).catch(() => {});
+
+        return () => { cancelled = true; };
+      }, [gameState, currentIndex, questions]);
+
       const clearCanvas = (currentState) => {
         pathsRef.current = [];
         currentPathRef.current = [];
@@ -613,76 +845,76 @@
         }
       };
 
-      const checkWriting = () => {
-        const width = CANVAS_SIZE;
-        const height = CANVAS_SIZE;
+      const KANJI_FONT = `340px "UD デジタル 教科書体 N-B", "UD Digi Kyokasho N-B", "Klee One", serif`;
 
-        let totalPoints = 0;
-
-        pathsRef.current.forEach(path => {
-          path.forEach(pt => {
-            totalPoints++;
-          });
-        });
-
-        if (totalPoints < 2) {
+      // 採点結果の表示（正解は加点して次へ、不正解はお手本を薄く出して練習へ）
+      const showWriteResult = (earnedPoints, feedbackMark, failMessage) => {
+        if (earnedPoints > 0) {
+          setFeedback(feedbackMark);
+          setErrorMessage(`${earnedPoints} てん！`);
+          if (!hasMistaked) {
+            setScore(s => s + earnedPoints);
+            addScoreToLocal(earnedPoints);
+          }
+          setTimeout(() => {
+            goToNextQuestion('WRITE');
+          }, 1500);
+        } else {
           setFeedback('❌');
-          setErrorMessage('かいていないよ！');
+          setHasMistaked(true);
+          setErrorMessage(failMessage);
+
+          const bgCanvas = bgCanvasRef.current;
+          if (bgCanvas) {
+            const bgCtx = bgCanvas.getContext('2d');
+            bgCtx.font = KANJI_FONT;
+            bgCtx.textAlign = 'center';
+            bgCtx.textBaseline = 'middle';
+            bgCtx.fillStyle = 'rgba(224, 122, 95, 0.3)'; // terracotta
+            bgCtx.fillText(questions[currentIndex].k, bgCanvas.width / 2, bgCanvas.height / 2);
+          }
+
           setTimeout(() => {
             setFeedback(null);
             setErrorMessage('');
             setGameState('PRACTICE');
           }, 2500);
-          return;
         }
+      };
 
-        const normalizedPaths = pathsRef.current;
-        const targetStrokeCount = questions[currentIndex].stroke;
-        
-        // ★ チート対策: 実際に動かした線の合計距離（ピクセル）を計算
-        let totalPathLength = 0;
-        normalizedPaths.forEach(path => {
-          let strokeLen = 0;
-          for (let i = 1; i < path.length; i++) {
-            const dx = path[i].x - path[i-1].x;
-            const dy = path[i].y - path[i-1].y;
-            strokeLen += Math.sqrt(dx*dx + dy*dy);
-          }
-          totalPathLength += strokeLen;
-        });
+      // フォールバック判定（KanjiVG を取得できない場合のみ）
+      // 被覆率(再現率)と適合率の F1 で形を評価し、はみ出した塗りつぶしを弾く。
+      const gradeByPixels = (paths, targetChar, targetStrokeCount) => {
+        const width = CANVAS_SIZE;
+        const height = CANVAS_SIZE;
 
-        // ★ 合計距離が短すぎる（点やごく短い線の集まり）場合は強制的に弾く
-        const isPathTooShort = totalPathLength < Math.max(100, targetStrokeCount * 25);
+        if (paths.length !== targetStrokeCount) {
+          return { earnedPoints: 0, feedbackMark: '', failMessage: `かくすう が ちがうよ！\n(せいかいは ${targetStrokeCount} かく)` };
+        }
 
         const targetCanvas = document.createElement('canvas');
         targetCanvas.width = width;
         targetCanvas.height = height;
         const targetCtx = targetCanvas.getContext('2d', { willReadFrequently: true });
-        
-        targetCtx.font = `340px "UD デジタル 教科書体 N-B", "UD Digi Kyokasho N-B", "Klee One", serif`;
+        targetCtx.font = KANJI_FONT;
         targetCtx.textAlign = 'center';
         targetCtx.textBaseline = 'middle';
         targetCtx.fillStyle = '#FF0000';
-        targetCtx.fillText(questions[currentIndex].k, width / 2, height / 2);
-        
+        targetCtx.fillText(targetChar, width / 2, height / 2);
         targetCtx.lineWidth = 10;
         targetCtx.strokeStyle = '#FF0000';
-        targetCtx.strokeText(questions[currentIndex].k, width / 2, height / 2);
-
+        targetCtx.strokeText(targetChar, width / 2, height / 2);
         const targetData = targetCtx.getImageData(0, 0, width, height).data;
 
         const userCanvas = document.createElement('canvas');
         userCanvas.width = width;
         userCanvas.height = height;
         const userCtx = userCanvas.getContext('2d', { willReadFrequently: true });
-        
-        // ★ 大きなインクの広がりを防ぎつつ、指先のズレを考慮する丁度良い太さに
-        userCtx.lineWidth = 35; 
+        userCtx.lineWidth = 35;
         userCtx.lineCap = 'round';
         userCtx.lineJoin = 'round';
         userCtx.strokeStyle = '#000000';
-
-        normalizedPaths.forEach(path => {
+        paths.forEach(path => {
           if (path.length === 0) return;
           userCtx.beginPath();
           userCtx.moveTo(path[0].x, path[0].y);
@@ -695,106 +927,102 @@
           }
           userCtx.stroke();
         });
-
         const userData = userCtx.getImageData(0, 0, width, height).data;
 
         let targetPixelCount = 0;
         let userPixelCount = 0;
         let coveredPixelCount = 0;
         const step = 4;
-
         for (let y = 0; y < height; y += step) {
           for (let x = 0; x < width; x += step) {
             const i = (y * width + x) * 4;
             const isTarget = targetData[i + 3] > 50;
             const isUser = userData[i + 3] > 50;
-
             if (isTarget) targetPixelCount++;
             if (isUser) userPixelCount++;
             if (isTarget && isUser) coveredPixelCount++;
           }
         }
 
-        const coverRate = targetPixelCount === 0 ? 0 : coveredPixelCount / targetPixelCount;
-        const overdrawRatio = targetPixelCount === 0 ? 0 : userPixelCount / targetPixelCount;
-        
-        const isNotCheating = overdrawRatio < 3.0; // 通常の文字が弾かれないようにかなり甘め
-        
-        const userStrokeCount = pathsRef.current.length;
-        const isStrokeCorrect = userStrokeCount === targetStrokeCount;
+        const recall = targetPixelCount === 0 ? 0 : coveredPixelCount / targetPixelCount;
+        const precision = userPixelCount === 0 ? 0 : coveredPixelCount / userPixelCount;
+        const f1 = (recall + precision) > 0 ? (2 * recall * precision) / (recall + precision) : 0;
 
-        let t3 = 0.75;
-        let t2 = 0.65; 
-        let t1 = 0.45;
+        // 画数が少ない字は太い線で重なりやすいので少しだけ甘くする
+        let t3 = 0.62, t2 = 0.50, t1 = 0.40;
+        if (targetStrokeCount <= 2) { t3 -= 0.12; t2 -= 0.10; t1 -= 0.08; }
+        else if (targetStrokeCount <= 4) { t3 -= 0.08; t2 -= 0.06; t1 -= 0.05; }
+        else if (targetStrokeCount <= 6) { t3 -= 0.04; t2 -= 0.03; t1 -= 0.02; }
 
-        if (targetStrokeCount <= 2) {
-          t3 -= 0.15; t2 -= 0.15; t1 -= 0.15; 
-        } else if (targetStrokeCount <= 4) {
-          t3 -= 0.10; t2 -= 0.10; t1 -= 0.10; 
-        } else if (targetStrokeCount <= 6) {
-          t3 -= 0.05; t2 -= 0.05; t1 -= 0.05; 
+        let earnedPoints = 0, feedbackMark = '';
+        if (f1 >= t3) { earnedPoints = 3; feedbackMark = '💮'; }
+        else if (f1 >= t2) { earnedPoints = 2; feedbackMark = '⭕️'; }
+        else if (f1 >= t1) { earnedPoints = 1; feedbackMark = '👌'; }
+
+        return { earnedPoints, feedbackMark, failMessage: `おしい！かたち や いち が ちがうかも。\nじゅうじの せん に あわせて かいてみよう。` };
+      };
+
+      const checkWriting = async () => {
+        const targetChar = questions[currentIndex].k;
+        const targetStrokeCount = questions[currentIndex].stroke;
+
+        // 何も書いていない
+        let totalPoints = 0;
+        pathsRef.current.forEach(path => { totalPoints += path.length; });
+        if (totalPoints < 2) {
+          showWriteResult(0, '', 'かいていないよ！');
+          return;
         }
-        
-        t1 = Math.max(0.25, t1);
-        t2 = Math.max(t1 + 0.1, t2);
-        t3 = Math.max(t2 + 0.1, t3);
 
-        let earnedPoints = 0;
-        let feedbackMark = '';
-
-        if (isStrokeCorrect && isNotCheating && !isPathTooShort) {
-          if (coverRate >= t3) {
-            earnedPoints = 3;
-            feedbackMark = '💮';
-          } else if (coverRate >= t2) {
-            earnedPoints = 2;
-            feedbackMark = '⭕️';
-          } else if (coverRate >= t1) {
-            earnedPoints = 1;
-            feedbackMark = '👌';
+        // チート対策: 線の合計距離が短すぎる（点やごく短い線の集まり）場合は弾く
+        let totalPathLength = 0;
+        pathsRef.current.forEach(path => {
+          for (let i = 1; i < path.length; i++) {
+            const dx = path[i].x - path[i - 1].x;
+            const dy = path[i].y - path[i - 1].y;
+            totalPathLength += Math.sqrt(dx * dx + dy * dy);
           }
+        });
+        if (totalPathLength < Math.max(100, targetStrokeCount * 25)) {
+          showWriteResult(0, '', `せん が みじかすぎるよ！\nしっかり かこう。`);
+          return;
         }
-        
-        if (earnedPoints > 0) {
-          setFeedback(feedbackMark);
-          setErrorMessage(`${earnedPoints} てん！`);
-          if (!hasMistaked) {
-            setScore(s => s + earnedPoints);
-            addScoreToLocal(earnedPoints); 
-          }
-          setTimeout(() => {
-            goToNextQuestion('WRITE');
-          }, 1500);
-        } else {
-          setFeedback('❌');
-          setHasMistaked(true); 
-          
-          if (!isStrokeCorrect) {
-            setErrorMessage(`かくすう が ちがうよ！\n(せいかいは ${targetStrokeCount} かく)`);
-          } else if (isPathTooShort) {
-            setErrorMessage(`せん が みじかすぎるよ！\nしっかり なぞろう。`);
-          } else if (!isNotCheating) {
-            setErrorMessage(`せん が ながすぎるかも。\nきれいな かたち を いしきしてね。`);
-          } else {
-            setErrorMessage(`おしい！かたち や いち が ちがうかも。\nじゅうじの せん に あわせて かいてみよう。`);
-          }
-          
-          const bgCanvas = bgCanvasRef.current;
-          if (bgCanvas) {
-            const bgCtx = bgCanvas.getContext('2d');
-            bgCtx.font = `340px "UD デジタル 教科書体 N-B", "UD Digi Kyokasho N-B", "Klee One", serif`;
-            bgCtx.textAlign = 'center';
-            bgCtx.textBaseline = 'middle';
-            bgCtx.fillStyle = 'rgba(224, 122, 95, 0.3)'; // terracotta
-            bgCtx.fillText(questions[currentIndex].k, bgCanvas.width / 2, bgCanvas.height / 2);
-          }
 
-          setTimeout(() => {
-            setFeedback(null);
-            setErrorMessage('');
-            setGameState('PRACTICE'); 
-          }, 2500);
+        // KanjiVG データ（先読み済みなら即時、未取得なら待つ）
+        let strokeData = strokeDataRef.current.char === targetChar ? strokeDataRef.current.data : null;
+        if (!strokeData) {
+          setIsJudging(true);
+          try {
+            strokeData = await fetchKanjiVg(targetChar);
+            strokeDataRef.current = { char: targetChar, data: strokeData };
+          } catch (e) {
+            strokeData = null;
+          }
+          setIsJudging(false);
         }
+
+        // ── 主判定: KanjiVG ベクターによる幾何照合（始点・終点・交差・書き順）──
+        if (strokeData && strokeData.length > 0) {
+          const result = gradeStrokes(pathsRef.current, strokeData, CANVAS_SIZE);
+          if (!result.strokeCountMatch) {
+            showWriteResult(0, '', `かくすう が ちがうよ！\n(せいかいは ${result.expectedCount} かく)`);
+            return;
+          }
+          if (!result.crossMatch) {
+            showWriteResult(0, '', `かたち が ちがうみたい。\nせん の むき や こうさ に きをつけてね。`);
+            return;
+          }
+          let earnedPoints = 0, feedbackMark = '';
+          if (result.total >= 85) { earnedPoints = 3; feedbackMark = '💮'; }
+          else if (result.total >= 70) { earnedPoints = 2; feedbackMark = '⭕️'; }
+          else if (result.total >= 50) { earnedPoints = 1; feedbackMark = '👌'; }
+          showWriteResult(earnedPoints, feedbackMark, `おしい！かたち や いち が ちがうかも。\nおてほん を よく見て かいてみよう。`);
+          return;
+        }
+
+        // ── フォールバック: ピクセル被覆 + 適合率（オフライン等で KanjiVG 不可時）──
+        const pixelResult = gradeByPixels(pathsRef.current, targetChar, targetStrokeCount);
+        showWriteResult(pixelResult.earnedPoints, pixelResult.feedbackMark, pixelResult.failMessage);
       };
 
       const displayUnitName = selectedUnits.length === 1 
@@ -1092,12 +1320,12 @@
                       </button>
                       
                       {gameState === 'WRITE' ? (
-                        <button 
+                        <button
                           onClick={checkWriting}
-                          disabled={feedback !== null}
-                          className="bg-terracotta text-white font-rounded py-3 px-6 sm:px-10 rounded-full shadow-md active:translate-y-1 active:shadow-sm flex items-center gap-2 sm:gap-3 text-base sm:text-xl transition-all"
+                          disabled={feedback !== null || isJudging}
+                          className="bg-terracotta text-white font-rounded py-3 px-6 sm:px-10 rounded-full shadow-md active:translate-y-1 active:shadow-sm flex items-center gap-2 sm:gap-3 text-base sm:text-xl transition-all disabled:opacity-70"
                         >
-                          できた！
+                          {isJudging ? 'はんてい中…' : 'できた！'}
                         </button>
                       ) : (
                         <button 
