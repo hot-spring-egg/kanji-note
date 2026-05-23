@@ -617,16 +617,10 @@
         const width = CANVAS_SIZE;
         const height = CANVAS_SIZE;
 
-        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
         let totalPoints = 0;
-        const halfPen = penSize / 2;
 
         pathsRef.current.forEach(path => {
           path.forEach(pt => {
-            if (pt.x - halfPen < minX) minX = pt.x - halfPen;
-            if (pt.x + halfPen > maxX) maxX = pt.x + halfPen;
-            if (pt.y - halfPen < minY) minY = pt.y - halfPen;
-            if (pt.y + halfPen > maxY) maxY = pt.y + halfPen;
             totalPoints++;
           });
         });
@@ -642,13 +636,23 @@
           return;
         }
 
-        const userW = maxX - minX;
-        const userH = maxY - minY;
-        
-        // ★ 小さすぎる文字は弾く
-        const isTooSmall = Math.max(userW, userH) < 100;
-
         const normalizedPaths = pathsRef.current;
+        const targetStrokeCount = questions[currentIndex].stroke;
+        
+        // ★ チート対策: 実際に動かした線の合計距離（ピクセル）を計算
+        let totalPathLength = 0;
+        normalizedPaths.forEach(path => {
+          let strokeLen = 0;
+          for (let i = 1; i < path.length; i++) {
+            const dx = path[i].x - path[i-1].x;
+            const dy = path[i].y - path[i-1].y;
+            strokeLen += Math.sqrt(dx*dx + dy*dy);
+          }
+          totalPathLength += strokeLen;
+        });
+
+        // ★ 合計距離が短すぎる（点やごく短い線の集まり）場合は強制的に弾く
+        const isPathTooShort = totalPathLength < Math.max(100, targetStrokeCount * 25);
 
         const targetCanvas = document.createElement('canvas');
         targetCanvas.width = width;
@@ -661,8 +665,7 @@
         targetCtx.fillStyle = '#FF0000';
         targetCtx.fillText(questions[currentIndex].k, width / 2, height / 2);
         
-        // ★ お手本の線を少し太くし、カバーしやすくする
-        targetCtx.lineWidth = 15;
+        targetCtx.lineWidth = 10;
         targetCtx.strokeStyle = '#FF0000';
         targetCtx.strokeText(questions[currentIndex].k, width / 2, height / 2);
 
@@ -673,8 +676,8 @@
         userCanvas.height = height;
         const userCtx = userCanvas.getContext('2d', { willReadFrequently: true });
         
-        // ★ 子供の指書きブレを許容するため、内部判定用の線を太くする
-        userCtx.lineWidth = 40; 
+        // ★ 大きなインクの広がりを防ぎつつ、指先のズレを考慮する丁度良い太さに
+        userCtx.lineWidth = 35; 
         userCtx.lineCap = 'round';
         userCtx.lineJoin = 'round';
         userCtx.strokeStyle = '#000000';
@@ -715,19 +718,15 @@
         const coverRate = targetPixelCount === 0 ? 0 : coveredPixelCount / targetPixelCount;
         const overdrawRatio = targetPixelCount === 0 ? 0 : userPixelCount / targetPixelCount;
         
-        // ★「なぞりすぎ」の判定を大幅に緩和し、正常な文字が弾かれないようにする
-        const isNotCheating = overdrawRatio < 3.0;
+        const isNotCheating = overdrawRatio < 3.0; // 通常の文字が弾かれないようにかなり甘め
         
         const userStrokeCount = pathsRef.current.length;
-        const targetStrokeCount = questions[currentIndex].stroke;
         const isStrokeCorrect = userStrokeCount === targetStrokeCount;
 
-        // ★3段階評価の境界値
         let t3 = 0.75;
         let t2 = 0.65; 
         let t1 = 0.45;
 
-        // 画数が少ないと難易度が上がるための調整
         if (targetStrokeCount <= 2) {
           t3 -= 0.15; t2 -= 0.15; t1 -= 0.15; 
         } else if (targetStrokeCount <= 4) {
@@ -743,7 +742,7 @@
         let earnedPoints = 0;
         let feedbackMark = '';
 
-        if (isStrokeCorrect && isNotCheating && !isTooSmall) {
+        if (isStrokeCorrect && isNotCheating && !isPathTooShort) {
           if (coverRate >= t3) {
             earnedPoints = 3;
             feedbackMark = '💮';
@@ -769,10 +768,11 @@
         } else {
           setFeedback('❌');
           setHasMistaked(true); 
+          
           if (!isStrokeCorrect) {
             setErrorMessage(`かくすう が ちがうよ！\n(せいかいは ${targetStrokeCount} かく)`);
-          } else if (isTooSmall) {
-            setErrorMessage(`じ が ちいさすぎるよ！\nわくの なかに おおきく かこう。`);
+          } else if (isPathTooShort) {
+            setErrorMessage(`せん が みじかすぎるよ！\nしっかり なぞろう。`);
           } else if (!isNotCheating) {
             setErrorMessage(`せん が ながすぎるかも。\nきれいな かたち を いしきしてね。`);
           } else {
