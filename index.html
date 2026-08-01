@@ -294,33 +294,894 @@
       });
     });
 
+    // ==== KANJI_JUDGE_ENGINE_START ====
+    // カンジノート 手書き判定エンジン
+    //
+    // 設計方針
+    //   1. 純粋な関数の集まりとし、DOM にも React にも依存しない（Node で単体テストできる）
+    //   2. 児童に身につけてほしい 5 観点を独立に採点し、どこが違うかを名指しで返す
+    //        字形 / 配置 / 書き順 / 点画の交差 / 終筆（とめ・はね・はらい）
+    //   3. 「なんとなく減点」をやめ、観点ごとに合否の根拠を持たせる
+    //
+    // 座標系: すべて 0-1 に正規化された文字枠内座標（左上原点）
+    var KanjiJudge = (function () {
+      'use strict';
+
+      // ============================================================
+      // 設定
+      // ============================================================
+      var CONFIG = {
+        /** 1 画あたりのリサンプリング点数（形状比較・交差判定の解像度） */
+        RESAMPLE_N: 48,
+
+        // ── 字形 ──
+        /** 位置合わせ後の平均ずれがこの値に達すると字形 0 点 */
+        SHAPE_TOLERANCE: 0.115,
+        /** 画の向きが逆と判定するための、順方向とのずれの差 */
+        REVERSE_MARGIN: 0.02,
+
+        // ── 配置（大きさ・位置）──
+        /** 中心のずれがこの値に達すると配置 0 点 */
+        OFFSET_TOLERANCE: 0.22,
+        /** 大きさの比 log|s| がこの値に達すると配置 0 点（≒ 1.9 倍 / 0.53 倍） */
+        SCALE_TOLERANCE: 0.65,
+
+        // ── 点画の交差 ──
+        /** この距離以内に近づいていれば「接している」 */
+        TOUCH_DISTANCE: 0.045,
+        /** 交点から画の端までの長さがこれ以上なら「突き抜けている」 */
+        PENETRATION_MIN: 0.05,
+
+        // ── 終筆（とめ・はね・はらい）──
+        /** 主方向に対する角度差がこれ以上なら「はね」 */
+        HOOK_MIN_ANGLE: 65,
+        /**
+         * はねと認める尾の長さ（画全体に対する比）の下限・上限。
+         * 上限が緩いと「口」の 2 画目のような「おれ」を、はねと取り違える。
+         * 実際の手本では、はねの尾は画全体の 6〜12% に収まる。
+         */
+        HOOK_MIN_RATIO: 0.045,
+        HOOK_MAX_RATIO: 0.2,
+        /** はねの向きを見るために遡る長さ（画全体に対する比） */
+        HOOK_LEAD_RATIO: 0.3,
+        /** 終筆速度 / 平均速度 がこれ以上なら「はらい」、これ以下なら「とめ」 */
+        SWEEP_VELOCITY_RATIO: 0.9,
+        STOP_VELOCITY_RATIO: 0.55,
+        /** 終筆判定を行う最短の画長（点や短い画は対象外） */
+        MIN_ENDING_LENGTH: 0.15,
+
+        // ── 画数の自動補修 ──
+        /** 続けて書かれた 2 画をつなげて 1 画とみなす際の、間隔の上限 */
+        MERGE_GAP_DISTANCE: 0.07,
+
+        // ── 配点（合計 100 点）──
+        WEIGHTS: {
+          SHAPE: 30,     // 字形（線の形そのもの）
+          PLACEMENT: 10, // 配置（大きさ・中心）
+          ORDER: 25,     // 書き順
+          CROSS: 20,     // 点画の交差
+          ENDING: 15,    // 終筆（とめ・はね・はらい）
+        },
+
+        /** 合格に必要な総合点 */
+        PASS_SCORE: 60,
+      };
+
+      /** kvg:type のうち払いで終わる画（撇・捺・提の系統） */
+      var SWEEP_TYPES = '㇒㇓㇏㇇㇋㇀㇊㇙'; // ㇒㇓㇏㇇㇋㇀㇊㇙
+
+      var ENDING_LABEL = { tome: 'とめ', hane: 'はね', harai: 'はらい' };
+
+      // ============================================================
+      // 幾何の基本
+      // ============================================================
+      function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+      function angleBetween(v1, v2) {
+        var m1 = Math.hypot(v1.x, v1.y), m2 = Math.hypot(v2.x, v2.y);
+        if (m1 === 0 || m2 === 0) return 0;
+        var c = (v1.x * v2.x + v1.y * v2.y) / (m1 * m2);
+        return Math.acos(Math.max(-1, Math.min(1, c))) * 180 / Math.PI;
+      }
+
+      /** 連続する重複点を除いた配列を返す */
+      function dedupe(points) {
+        var out = [];
+        for (var i = 0; i < points.length; i++) {
+          var p = points[i];
+          if (!p || !isFinite(p.x) || !isFinite(p.y)) continue;
+          if (out.length === 0 || dist(out[out.length - 1], p) > 1e-9) out.push(p);
+        }
+        return out;
+      }
+
+      /** 折れ線の総長 */
+      function pathLength(points) {
+        var total = 0;
+        for (var i = 1; i < points.length; i++) total += dist(points[i - 1], points[i]);
+        return total;
+      }
+
+      /** 折れ線を弧長等間隔で n 点にリサンプリングする */
+      function resample(points, n) {
+        var pts = dedupe(points);
+        if (pts.length === 0) return [];
+        if (pts.length === 1) {
+          var out1 = [];
+          for (var k1 = 0; k1 < n; k1++) out1.push({ x: pts[0].x, y: pts[0].y });
+          return out1;
+        }
+        var cum = [0];
+        for (var i = 1; i < pts.length; i++) cum.push(cum[i - 1] + dist(pts[i - 1], pts[i]));
+        var total = cum[cum.length - 1];
+        var out = [], j = 0;
+        for (var k = 0; k < n; k++) {
+          var target = total * k / (n - 1);
+          while (j < cum.length - 2 && cum[j + 1] < target) j++;
+          var seg = cum[j + 1] - cum[j];
+          var t = seg > 0 ? (target - cum[j]) / seg : 0;
+          out.push({
+            x: pts[j].x + (pts[j + 1].x - pts[j].x) * t,
+            y: pts[j].y + (pts[j + 1].y - pts[j].y) * t,
+          });
+        }
+        return out;
+      }
+
+      /** 2 線分の交点（交わらなければ null）。t, u は各線分上の位置(0-1) */
+      function segIntersect(p1, p2, p3, p4) {
+        var d1x = p2.x - p1.x, d1y = p2.y - p1.y;
+        var d2x = p4.x - p3.x, d2y = p4.y - p3.y;
+        var den = d1x * d2y - d1y * d2x;
+        if (Math.abs(den) < 1e-12) return null;
+        var t = ((p3.x - p1.x) * d2y - (p3.y - p1.y) * d2x) / den;
+        var u = ((p3.x - p1.x) * d1y - (p3.y - p1.y) * d1x) / den;
+        if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+        return { t: t, u: u, x: p1.x + d1x * t, y: p1.y + d1y * t };
+      }
+
+      /** 点と線分の距離 */
+      function pointSegDistance(p, a, b) {
+        var dx = b.x - a.x, dy = b.y - a.y;
+        var len2 = dx * dx + dy * dy;
+        if (len2 === 0) return dist(p, a);
+        var t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+        t = Math.max(0, Math.min(1, t));
+        return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
+      }
+
+      /** 2 本の折れ線の最近接距離 */
+      function polylineDistance(s1, s2) {
+        var min = Infinity, i, j;
+        for (i = 0; i < s1.length; i++) {
+          for (j = 0; j < s2.length - 1; j++) {
+            var d = pointSegDistance(s1[i], s2[j], s2[j + 1]);
+            if (d < min) min = d;
+          }
+        }
+        for (i = 0; i < s2.length; i++) {
+          for (j = 0; j < s1.length - 1; j++) {
+            var d2 = pointSegDistance(s2[i], s1[j], s1[j + 1]);
+            if (d2 < min) min = d2;
+          }
+        }
+        return min;
+      }
+
+      /** 対応点どうしの平均距離（両者は同じ点数にリサンプリング済みであること） */
+      function meanPointDistance(a, b) {
+        var n = Math.min(a.length, b.length);
+        if (n === 0) return Infinity;
+        var sum = 0;
+        for (var i = 0; i < n; i++) sum += dist(a[i], b[i]);
+        return sum / n;
+      }
+
+      function reversed(points) { return points.slice().reverse(); }
+
+      // ============================================================
+      // 点画の交差関係
+      //   'cross'（突き抜けている） / 'touch'（接している） / 'apart'（離れている）
+      // ============================================================
+      /**
+       * 2 画の関係を求める。
+       * 交点が存在しても、交点から双方の端までの長さが短ければ「接している」に留める。
+       * これにより「口」の角のような接続と、「十」のような突き抜けを区別できる。
+       */
+      function bbox(points) {
+        var b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+        for (var i = 0; i < points.length; i++) {
+          if (points[i].x < b.x0) b.x0 = points[i].x;
+          if (points[i].y < b.y0) b.y0 = points[i].y;
+          if (points[i].x > b.x1) b.x1 = points[i].x;
+          if (points[i].y > b.y1) b.y1 = points[i].y;
+        }
+        return b;
+      }
+
+      function strokeRelation(s1, s2) {
+        if (s1.length < 2 || s2.length < 2) return { kind: 'apart', margin: 0, gap: Infinity };
+        // 外接矩形が離れていれば、線分の総当たりをせずに「離れている」と決められる
+        var b1 = bbox(s1), b2 = bbox(s2), pad = CONFIG.TOUCH_DISTANCE;
+        if (b1.x1 + pad < b2.x0 || b2.x1 + pad < b1.x0 || b1.y1 + pad < b2.y0 || b2.y1 + pad < b1.y0) {
+          return { kind: 'apart', margin: 0, gap: Infinity };
+        }
+        var len1 = pathLength(s1), len2 = pathLength(s2);
+        var best = 0, found = false;
+        var acc1 = [0], acc2 = [0], i, j;
+        for (i = 1; i < s1.length; i++) acc1.push(acc1[i - 1] + dist(s1[i - 1], s1[i]));
+        for (j = 1; j < s2.length; j++) acc2.push(acc2[j - 1] + dist(s2[j - 1], s2[j]));
+
+        for (i = 0; i < s1.length - 1; i++) {
+          for (j = 0; j < s2.length - 1; j++) {
+            var hit = segIntersect(s1[i], s1[i + 1], s2[j], s2[j + 1]);
+            if (!hit) continue;
+            found = true;
+            var at1 = acc1[i] + hit.t * (acc1[i + 1] - acc1[i]);
+            var at2 = acc2[j] + hit.u * (acc2[j + 1] - acc2[j]);
+            // 交点から「近い方の端」までの長さ。両方が長ければ本当に突き抜けている。
+            var margin = Math.min(
+              Math.min(at1, len1 - at1),
+              Math.min(at2, len2 - at2)
+            );
+            if (margin > best) best = margin;
+          }
+        }
+        if (found) {
+          return best >= CONFIG.PENETRATION_MIN
+            ? { kind: 'cross', margin: best }
+            : { kind: 'touch', margin: best };
+        }
+        var gap = polylineDistance(s1, s2);
+        return gap <= CONFIG.TOUCH_DISTANCE
+          ? { kind: 'touch', margin: 0, gap: gap }
+          : { kind: 'apart', margin: 0, gap: gap };
+      }
+
+      /** 交差関係の食い違いの重さ（0 = 一致, 1 = 軽い, 2 = 重い） */
+      function relationSeverity(expected, actual) {
+        if (expected === actual) return 0;
+        if ((expected === 'cross' && actual === 'apart') || (expected === 'apart' && actual === 'cross')) return 2;
+        if (expected === 'cross' || actual === 'cross') return 2; // cross ↔ touch も学習上は重要
+        return 1; // touch ↔ apart
+      }
+
+      // ============================================================
+      // 終筆（とめ・はね・はらい）
+      // ============================================================
+      /**
+       * 折れ線の末尾に「はね」があるかを幾何的に調べる。
+       * 手本（KanjiVG）にも児童の線にも同じ判定を使うので、基準がぶれない。
+       */
+      function detectHook(points) {
+        var clean = dedupe(points);
+        if (clean.length < 4) return { hook: false, angle: 0, ratio: 0 };
+        // 手本も児童の線も同じ点密度に揃えてから調べる（判定基準をぶらさないため）
+        var pts = resample(clean, CONFIG.RESAMPLE_N);
+        var total = pathLength(pts);
+        if (total <= 0) return { hook: false, angle: 0, ratio: 0 };
+
+        var acc = [0];
+        for (var i = 1; i < pts.length; i++) acc.push(acc[i - 1] + dist(pts[i - 1], pts[i]));
+
+        var end = pts[pts.length - 1];
+        var bestAngle = 0, bestRatio = 0;
+
+        for (var k = 1; k < pts.length - 1; k++) {
+          var tailLen = total - acc[k];
+          var ratio = tailLen / total;
+          if (ratio < CONFIG.HOOK_MIN_RATIO) break;      // 以降はさらに短くなるだけ
+          if (ratio > CONFIG.HOOK_MAX_RATIO) continue;   // まだ尾として長すぎる
+
+          // 角に入ってくる向き（角より手前を一定長さ遡った弦）
+          var leadTarget = acc[k] - total * CONFIG.HOOK_LEAD_RATIO;
+          var m = k;
+          while (m > 0 && acc[m] > leadTarget) m--;
+          if (m === k) continue;
+          var lead = { x: pts[k].x - pts[m].x, y: pts[k].y - pts[m].y };
+          var tail = { x: end.x - pts[k].x, y: end.y - pts[k].y };
+          var a = angleBetween(lead, tail);
+          if (a > bestAngle) { bestAngle = a; bestRatio = ratio; }
+        }
+        return { hook: bestAngle >= CONFIG.HOOK_MIN_ANGLE, angle: bestAngle, ratio: bestRatio };
+      }
+
+      /**
+       * 手本の 1 画に期待される終筆を決める。
+       * はねは形から（KanjiVG は鉤を実際に描いている）、はらいは kvg:type から判断する。
+       */
+      function expectedEnding(points, type) {
+        var head = typeof type === 'string' && type.length ? type.charAt(0) : '';
+        // 点（㇔）は「とん」と打つ画で、とめ・はらいの区別を問うても意味がないため対象外
+        if (head === '㇔') return 'none';
+        if (pathLength(points) < CONFIG.MIN_ENDING_LENGTH) return 'none';
+        // はねの有無は手本の形そのもので決める。
+        // kvg:type の鉤系（㇖ など）には、実際には「おれ」で止める画も含まれるため、
+        // 種別ではなく描かれている形を根拠にする（児童に見せる手本と食い違わせない）。
+        if (detectHook(points).hook) return 'hane';
+        if (head && SWEEP_TYPES.indexOf(head) >= 0) return 'harai';
+        return 'tome';
+      }
+
+      /**
+       * 児童の 1 画の終筆を推定する。
+       * はねは形で確実に取れる。とめ／はらいは筆速に頼るため、時刻が無ければ 'unknown'。
+       */
+      function detectEnding(points, scale) {
+        var pts = dedupe(points);
+        // 小さく書いた字でも同じ基準で見られるよう、手本に合わせた倍率で長さを測る
+        if (pathLength(pts) * (scale || 1) < CONFIG.MIN_ENDING_LENGTH) return { ending: 'none', hook: false };
+        var h = detectHook(pts);
+        if (h.hook) return { ending: 'hane', hook: true, angle: h.angle };
+
+        // 終筆の速さ（末尾 15% の平均速度 ÷ 全体の平均速度）
+        var hasTime = pts.length > 3 && typeof pts[0].t === 'number' && typeof pts[pts.length - 1].t === 'number';
+        if (hasTime) {
+          var totalLen = pathLength(pts);
+          var totalTime = pts[pts.length - 1].t - pts[0].t;
+          if (totalTime > 0 && totalLen > 0) {
+            var tailLen = 0, tailTime = 0;
+            for (var i = pts.length - 1; i > 0; i--) {
+              var d = dist(pts[i - 1], pts[i]);
+              if (tailLen + d > totalLen * 0.15) break;
+              tailLen += d;
+              tailTime += Math.max(0, pts[i].t - pts[i - 1].t);
+            }
+            if (tailLen > 0 && tailTime > 0) {
+              var ratio = (tailLen / tailTime) / (totalLen / totalTime);
+              if (ratio >= CONFIG.SWEEP_VELOCITY_RATIO) return { ending: 'harai', hook: false, velocityRatio: ratio };
+              if (ratio <= CONFIG.STOP_VELOCITY_RATIO) return { ending: 'tome', hook: false, velocityRatio: ratio };
+              return { ending: 'unknown', hook: false, velocityRatio: ratio };
+            }
+          }
+        }
+        return { ending: 'unknown', hook: false };
+      }
+
+      /** 終筆の一致度を 0-1 で返す。判定不能な部分は満点にせず 0.5 の部分点にする。 */
+      function endingScore(expected, actual) {
+        if (expected === 'none') return null;            // 採点対象外（点など短い画）
+        if (actual === expected) return 1;
+        if (expected === 'hane') return 0;               // はねの有無は形で確実に分かる
+        if (actual === 'hane') return 0;                 // はねてはいけない画をはねた
+        if (actual === 'unknown') return 0.5;            // とめ／はらいの区別がつかなかった
+        return 0.25;                                     // とめ ↔ はらい の取り違え
+      }
+
+      // ============================================================
+      // 位置合わせ（回転は正さない。傾きは誤りとして評価する）
+      // ============================================================
+      function similarityAlign(userStrokes, modelStrokes) {
+        var up = [], mp = [], i, j;
+        for (i = 0; i < userStrokes.length; i++) for (j = 0; j < userStrokes[i].length; j++) up.push(userStrokes[i][j]);
+        for (i = 0; i < modelStrokes.length; i++) for (j = 0; j < modelStrokes[i].length; j++) mp.push(modelStrokes[i][j]);
+        if (up.length === 0 || mp.length === 0) return { scale: 1, dx: 0, dy: 0, offset: 0, logScale: 0 };
+
+        function stats(pts) {
+          var cx = 0, cy = 0, k;
+          for (k = 0; k < pts.length; k++) { cx += pts[k].x; cy += pts[k].y; }
+          cx /= pts.length; cy /= pts.length;
+          var r = 0;
+          for (k = 0; k < pts.length; k++) r += (pts[k].x - cx) * (pts[k].x - cx) + (pts[k].y - cy) * (pts[k].y - cy);
+          return { cx: cx, cy: cy, r: Math.sqrt(r / pts.length) };
+        }
+        var su = stats(up), sm = stats(mp);
+        var scale = su.r > 1e-6 ? sm.r / su.r : 1;
+        return {
+          scale: scale,
+          dx: sm.cx - scale * su.cx,
+          dy: sm.cy - scale * su.cy,
+          offset: Math.hypot(su.cx - sm.cx, su.cy - sm.cy),
+          logScale: Math.abs(Math.log(scale > 1e-6 ? scale : 1e-6)),
+        };
+      }
+
+      function applyAlign(points, a) {
+        return points.map(function (p) { return { x: p.x * a.scale + a.dx, y: p.y * a.scale + a.dy }; });
+      }
+
+      // ============================================================
+      // 最適割り当て（ハンガリー法 O(n^3)）
+      //   cost: n x m 行列（n <= m）。戻り値は各行に割り当てられた列番号。
+      // ============================================================
+      function hungarian(cost) {
+        var n = cost.length;
+        if (n === 0) return [];
+        var m = cost[0].length;
+        var INF = Infinity;
+        var u = new Array(n + 1).fill(0), v = new Array(m + 1).fill(0);
+        var p = new Array(m + 1).fill(0), way = new Array(m + 1).fill(0);
+
+        for (var i = 1; i <= n; i++) {
+          p[0] = i;
+          var j0 = 0;
+          var minv = new Array(m + 1).fill(INF);
+          var used = new Array(m + 1).fill(false);
+          do {
+            used[j0] = true;
+            var i0 = p[j0], delta = INF, j1 = -1, j;
+            for (j = 1; j <= m; j++) {
+              if (used[j]) continue;
+              var cur = cost[i0 - 1][j - 1] - u[i0] - v[j];
+              if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
+              if (minv[j] < delta) { delta = minv[j]; j1 = j; }
+            }
+            for (j = 0; j <= m; j++) {
+              if (used[j]) { u[p[j]] += delta; v[j] -= delta; }
+              else minv[j] -= delta;
+            }
+            j0 = j1;
+          } while (p[j0] !== 0);
+          do { var j2 = way[j0]; p[j0] = p[j2]; j0 = j2; } while (j0);
+        }
+        var res = new Array(n).fill(-1);
+        for (var k = 1; k <= m; k++) if (p[k]) res[p[k] - 1] = k - 1;
+        return res;
+      }
+
+      // ============================================================
+      // 手本データの構築
+      // ============================================================
+      /**
+       * 手本の 1 画を作る。
+       * @param {Array<{x,y}>} rawPoints 0-1 に正規化済みの点列
+       * @param {string} [type] KanjiVG の kvg:type
+       */
+      function buildModelStroke(rawPoints, type) {
+        var pts = resample(rawPoints, CONFIG.RESAMPLE_N);
+        return {
+          points: pts,
+          type: type || '',
+          length: pathLength(pts),
+          ending: expectedEnding(pts, type),
+          start: pts[0],
+          end: pts[pts.length - 1],
+        };
+      }
+
+      /** 手本全体（交差関係もここで一度だけ計算する） */
+      function buildModel(strokes) {
+        var built = strokes.map(function (s) {
+          return s && s.points ? buildModelStroke(s.points, s.type) : buildModelStroke(s);
+        });
+        var relations = [];
+        for (var i = 0; i < built.length; i++) {
+          for (var j = i + 1; j < built.length; j++) {
+            var r = strokeRelation(built[i].points, built[j].points);
+            relations.push({ i: i, j: j, kind: r.kind, margin: r.margin });
+          }
+        }
+        return { strokes: built, relations: relations, strokeCount: built.length };
+      }
+
+      // ============================================================
+      // 画数の補修（ペンが跳ねて 1 画が 2 画に割れた場合を救う）
+      // ============================================================
+      function mergeOversplit(strokes, targetCount) {
+        var work = strokes.slice();
+        var merges = [];
+        var guard = 0;
+        while (work.length > targetCount && guard++ < 50) {
+          var bestIdx = -1, bestGap = Infinity;
+          for (var i = 0; i < work.length - 1; i++) {
+            var a = work[i], b = work[i + 1];
+            var gap = dist(a[a.length - 1], b[0]);
+            if (gap < bestGap) { bestGap = gap; bestIdx = i; }
+          }
+          if (bestIdx < 0 || bestGap > CONFIG.MERGE_GAP_DISTANCE) break;
+          merges.push({ index: bestIdx, gap: bestGap });
+          work.splice(bestIdx, 2, work[bestIdx].concat(work[bestIdx + 1]));
+        }
+        return { strokes: work, merges: merges, repaired: work.length === targetCount && merges.length > 0 };
+      }
+
+      // ============================================================
+      // 本体
+      // ============================================================
+      var ORDINAL = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+      function nth(i) {
+        var n = i + 1;
+        return (n <= 10 ? ORDINAL[n - 1] : String(n)) + 'かくめ'; // 「三かくめ」
+      }
+
+      /**
+       * 手書きの筆跡を採点する。
+       *
+       * @param {Array<Array<{x:number,y:number,t?:number}>>} rawUserStrokes キャンバス座標の筆跡
+       * @param {object} model buildModel() の戻り値
+       * @param {number} canvasSize 正規化のための一辺の長さ
+       * @returns {object} 採点結果
+       */
+      function judge(rawUserStrokes, model, canvasSize) {
+        var size = canvasSize || 1;
+        var expected = model.strokes.length;
+
+        // ── 正規化 ──
+        var normalized = (rawUserStrokes || [])
+          .map(function (s) {
+            return (s || []).map(function (p) { return { x: p.x / size, y: p.y / size, t: p.t }; });
+          })
+          .filter(function (s) { return dedupe(s).length >= 1; });
+
+        if (normalized.length === 0 || expected === 0) {
+          return emptyResult(expected, normalized.length);
+        }
+
+        // ── 画数 ──
+        var repair = normalized.length > expected ? mergeOversplit(normalized, expected) : null;
+        var strokesForJudge = repair && repair.repaired ? repair.strokes : normalized;
+        var actual = strokesForJudge.length;
+        var countMatch = actual === expected;
+
+        // 形状比較のために時刻付きの生データも保持する
+        var rawResampled = strokesForJudge.map(function (s) { return resample(s, CONFIG.RESAMPLE_N); });
+
+        // ── 位置合わせ ──
+        var align = similarityAlign(rawResampled, model.strokes.map(function (s) { return s.points; }));
+        var aligned = rawResampled.map(function (s) { return applyAlign(s, align); });
+
+        // ── 対応付け（どの画が手本の何画目か）──
+        // ハンガリー法は 行数 <= 列数 を要求するので、多い方を列に置く
+        var n = aligned.length, m = model.strokes.length;
+        var cost = [];
+        var costRows = n, costCols = m;
+        if (n > m) { costRows = m; costCols = n; }
+        for (var a = 0; a < costRows; a++) {
+          var row = [];
+          for (var b = 0; b < costCols; b++) {
+            var us = n > m ? aligned[b] : aligned[a];
+            var ms = n > m ? model.strokes[a] : model.strokes[b];
+            row.push(strokeCost(us, ms));
+          }
+          cost.push(row);
+        }
+        var assignRaw = hungarian(cost);
+        // userIndex -> modelIndex の対応表に直す
+        var userToModel = new Array(n).fill(-1);
+        if (n > m) {
+          for (var q = 0; q < assignRaw.length; q++) if (assignRaw[q] >= 0) userToModel[assignRaw[q]] = q;
+        } else {
+          for (var q2 = 0; q2 < assignRaw.length; q2++) userToModel[q2] = assignRaw[q2];
+        }
+
+        // ── 画ごとの評価 ──
+        var issues = [];
+        var strokeResults = [];
+        var shapeSum = 0, shapeCount = 0;
+        var orderCorrect = 0, orderCounted = 0;
+        var endingSum = 0, endingCount = 0;
+        var reversedCount = 0;
+
+        for (var i = 0; i < n; i++) {
+          var mi = userToModel[i];
+          var res = { userIndex: i, modelIndex: mi, inOrder: mi === i, reversed: false, shape: 0, ending: null };
+          if (mi < 0) { strokeResults.push(res); continue; }
+
+          var ms2 = model.strokes[mi];
+          var fwd = meanPointDistance(aligned[i], ms2.points);
+          var rev = meanPointDistance(reversed(aligned[i]), ms2.points);
+          res.reversed = rev + CONFIG.REVERSE_MARGIN < fwd;
+          var shapeDist = Math.min(fwd, rev);
+          res.shape = Math.max(0, 1 - shapeDist / CONFIG.SHAPE_TOLERANCE);
+          shapeSum += res.shape; shapeCount++;
+
+          if (res.reversed) {
+            reversedCount++;
+            issues.push({
+              kind: 'direction', severity: 2, model: mi,
+              message: nth(mi) + 'の かきはじめる ところが ぎゃくだよ',
+            });
+          }
+
+          orderCounted++;
+          if (mi === i) orderCorrect++;
+
+          // 終筆
+          var es = null;
+          if (ms2.ending !== 'none') {
+            var actualEnding = detectEnding(strokesForJudge[i], align.scale);
+            var sc = endingScore(ms2.ending, res.reversed ? 'unknown' : actualEnding.ending);
+            if (sc !== null) {
+              endingSum += sc; endingCount++;
+              es = { expected: ms2.ending, actual: actualEnding.ending, score: sc };
+              if (sc <= 0.25 && !res.reversed) {
+                issues.push({
+                  kind: 'ending', severity: sc === 0 ? 2 : 1, model: mi,
+                  message: nth(mi) + 'の おわりは「' + ENDING_LABEL[ms2.ending] + '」だよ',
+                });
+              }
+            }
+          }
+          res.ending = es;
+          strokeResults.push(res);
+        }
+
+        // 書き順の食い違いを名指しする
+        for (var r = 0; r < strokeResults.length; r++) {
+          var sr = strokeResults[r];
+          if (sr.modelIndex >= 0 && !sr.inOrder) {
+            issues.push({
+              kind: 'order', severity: 2, model: sr.modelIndex,
+              message: (sr.userIndex + 1) + '番めに かいた せんは 、ほんとうは ' + nth(sr.modelIndex) + ' だよ',
+            });
+          }
+        }
+
+        // ── 点画の交差 ──
+        var crossOk = 0, crossTotal = 0, crossBroken = 0;
+        var modelIndexToUser = {};
+        for (var mi2 = 0; mi2 < n; mi2++) if (userToModel[mi2] >= 0) modelIndexToUser[userToModel[mi2]] = mi2;
+
+        for (var ri = 0; ri < model.relations.length; ri++) {
+          var rel = model.relations[ri];
+          var ua = modelIndexToUser[rel.i], ub = modelIndexToUser[rel.j];
+          if (ua === undefined || ub === undefined) continue;
+          // 手本で「離れている」ペアは数が多く、無関係な組を数えても意味が薄いので
+          // 「接している／突き抜けている」ペアと、児童が誤って接触させたペアだけを見る。
+          var userRel = strokeRelation(aligned[ua], aligned[ub]);
+          if (rel.kind === 'apart' && userRel.kind === 'apart') continue;
+          crossTotal++;
+          var sev = relationSeverity(rel.kind, userRel.kind);
+          if (sev === 0) { crossOk++; continue; }
+          if (sev === 2) crossBroken++;
+          issues.push({
+            kind: 'cross', severity: sev, model: rel.i, model2: rel.j,
+            message: crossMessage(rel.i, rel.j, rel.kind, userRel.kind),
+          });
+        }
+
+        // ── 得点 ──
+        var W = CONFIG.WEIGHTS;
+        var shapeScore = shapeCount ? (shapeSum / shapeCount) * W.SHAPE : 0;
+        var placementScore = W.PLACEMENT
+          * Math.max(0, 1 - align.offset / CONFIG.OFFSET_TOLERANCE)
+          * Math.max(0, 1 - align.logScale / CONFIG.SCALE_TOLERANCE);
+        var orderScore = orderCounted ? (orderCorrect / orderCounted) * W.ORDER : 0;
+        var crossScore = crossTotal ? (crossOk / crossTotal) * W.CROSS : W.CROSS;
+        var endingScoreTotal = endingCount ? (endingSum / endingCount) * W.ENDING : W.ENDING;
+
+        var total = Math.round(shapeScore + placementScore + orderScore + crossScore + endingScoreTotal);
+
+        // ── 合否 ──
+        var criticals = [];
+        if (!countMatch) criticals.push('strokeCount');
+        if (crossBroken > 0) criticals.push('cross');
+        if (orderCounted && orderCorrect < orderCounted) criticals.push('order');
+        if (reversedCount > 0) criticals.push('direction');
+
+        if (!countMatch) {
+          // 足りない画があれば、それが何画目かまで伝える
+          var missing = [];
+          for (var mm = 0; mm < m; mm++) if (modelIndexToUser[mm] === undefined) missing.push(mm);
+          if (missing.length) {
+            issues.unshift({
+              kind: 'strokeCount', severity: 2, model: missing[0],
+              message: nth(missing[0]) + 'が たりないよ（せいかいは ' + expected + ' かく）',
+            });
+            for (var mv = 1; mv < missing.length; mv++) {
+              issues.push({ kind: 'strokeCount', severity: 1, model: missing[mv], message: nth(missing[mv]) + 'も たりないよ' });
+            }
+          } else {
+            issues.unshift({
+              kind: 'strokeCount', severity: 2, model: -1,
+              message: 'かくすうが ちがうよ！（せいかいは ' + expected + ' かく、かいたのは ' + normalized.length + ' かく）',
+            });
+          }
+          total = Math.min(total, 40);
+        }
+
+        var ok = criticals.length === 0 && total >= CONFIG.PASS_SCORE;
+
+        return {
+          ok: ok,
+          total: total,
+          points: ok ? (total >= 90 ? 3 : total >= 75 ? 2 : 1) : 0,
+          rank: total >= 90 ? 'excellent' : total >= 75 ? 'good' : total >= 55 ? 'fair' : 'poor',
+          scores: {
+            shape: Math.round(shapeScore),
+            placement: Math.round(placementScore),
+            order: Math.round(orderScore),
+            cross: Math.round(crossScore),
+            ending: Math.round(endingScoreTotal),
+          },
+          maxScores: { shape: W.SHAPE, placement: W.PLACEMENT, order: W.ORDER, cross: W.CROSS, ending: W.ENDING },
+          strokeCount: { expected: expected, actual: normalized.length, match: countMatch, repaired: !!(repair && repair.repaired) },
+          criticals: criticals,
+          issues: issues,
+          strokes: strokeResults,
+          align: align,
+          highlight: highlightList(issues),
+          messages: topMessages(issues),
+        };
+      }
+
+      function strokeCost(userPoints, modelStroke) {
+        var fwd = meanPointDistance(userPoints, modelStroke.points);
+        var rev = meanPointDistance(reversed(userPoints), modelStroke.points);
+        return Math.min(fwd, rev);
+      }
+
+      function crossMessage(i, j, expectedKind, actualKind) {
+        var a = nth(i), b = nth(j);
+        if (expectedKind === 'cross') {
+          return actualKind === 'apart'
+            ? a + 'と ' + b + 'は こうさ させて かこう'
+            : b + 'は ' + a + 'を つきぬけるよ';
+        }
+        if (actualKind === 'cross') return b + 'は ' + a + 'から つき出さないよ';
+        if (expectedKind === 'touch') return a + 'と ' + b + 'は くっつけよう';
+        return a + 'と ' + b + 'は はなして かこう';
+      }
+
+      function highlightList(issues) {
+        var set = {};
+        for (var i = 0; i < issues.length; i++) {
+          if (issues[i].model >= 0) set[issues[i].model] = true;
+          if (issues[i].model2 >= 0) set[issues[i].model2] = true;
+        }
+        return Object.keys(set).map(Number).sort(function (a, b) { return a - b; });
+      }
+
+      /** 児童に見せるのは重い順に最大 3 件まで */
+      function topMessages(issues, limit) {
+        var order = { strokeCount: 0, order: 1, cross: 2, direction: 3, ending: 4 };
+        return issues
+          .slice()
+          .sort(function (a, b) {
+            if (b.severity !== a.severity) return b.severity - a.severity;
+            return (order[a.kind] || 9) - (order[b.kind] || 9);
+          })
+          .map(function (x) { return x.message; })
+          .filter(function (msg, idx, arr) { return arr.indexOf(msg) === idx; })
+          .slice(0, limit || 3);
+      }
+
+      function emptyResult(expected, actual) {
+        return {
+          ok: false, total: 0, points: 0, rank: 'poor',
+          scores: { shape: 0, placement: 0, order: 0, cross: 0, ending: 0 },
+          maxScores: CONFIG.WEIGHTS,
+          strokeCount: { expected: expected, actual: actual, match: false, repaired: false },
+          criticals: ['empty'], issues: [], strokes: [], align: null, highlight: [],
+          messages: ['かいていないよ！'],
+        };
+      }
+
+      // ============================================================
+      // SVG パスの解析（KanjiVG の d 属性 → 点列）
+      //   DOM に依存しないので Node でもそのまま検証できる。
+      // ============================================================
+      function parsePath(d, flatness) {
+        var step = flatness || 1.2;
+        var tokens = String(d).match(/[MmLlHhVvCcSsQqTtZz]|-?\d*\.?\d+(?:[eE][-+]?\d+)?/g) || [];
+        var pts = [];
+        var i = 0, cmd = '', x = 0, y = 0, sx = 0, sy = 0;
+        var px = 0, py = 0;   // 直前の 3 次制御点（S/s 用）
+        var qx = 0, qy = 0;   // 直前の 2 次制御点（T/t 用）
+        var lastCmd = '';
+
+        function num() { return parseFloat(tokens[i++]); }
+        function push(nx, ny) {
+          if (pts.length === 0 || Math.hypot(nx - pts[pts.length - 1].x, ny - pts[pts.length - 1].y) > 1e-9) {
+            pts.push({ x: nx, y: ny });
+          }
+        }
+        function cubic(x1, y1, x2, y2, x3, y3) {
+          var chord = Math.hypot(x1 - x, y1 - y) + Math.hypot(x2 - x1, y2 - y1) + Math.hypot(x3 - x2, y3 - y2);
+          var n = Math.max(4, Math.min(64, Math.ceil(chord / step)));
+          for (var k = 1; k <= n; k++) {
+            var t = k / n, mt = 1 - t;
+            push(
+              mt * mt * mt * x + 3 * mt * mt * t * x1 + 3 * mt * t * t * x2 + t * t * t * x3,
+              mt * mt * mt * y + 3 * mt * mt * t * y1 + 3 * mt * t * t * y2 + t * t * t * y3
+            );
+          }
+          px = x2; py = y2; x = x3; y = y3;
+        }
+        function quad(x1, y1, x2, y2) {
+          cubic(x + 2 / 3 * (x1 - x), y + 2 / 3 * (y1 - y), x2 + 2 / 3 * (x1 - x2), y2 + 2 / 3 * (y1 - y2), x2, y2);
+          qx = x1; qy = y1;
+        }
+
+        while (i < tokens.length) {
+          var tok = tokens[i];
+          if (/[MmLlHhVvCcSsQqTtZz]/.test(tok)) { cmd = tok; i++; }
+          else if (!cmd) { i++; continue; }
+          else if (cmd === 'M') cmd = 'L';
+          else if (cmd === 'm') cmd = 'l';
+
+          var rel = cmd === cmd.toLowerCase();
+          var ox = rel ? x : 0, oy = rel ? y : 0;
+          switch (cmd.toUpperCase()) {
+            case 'M': x = num() + ox; y = num() + oy; sx = x; sy = y; push(x, y); break;
+            case 'L': x = num() + ox; y = num() + oy; push(x, y); break;
+            case 'H': x = num() + ox; push(x, y); break;
+            case 'V': y = num() + oy; push(x, y); break;
+            case 'C': cubic(num() + ox, num() + oy, num() + ox, num() + oy, num() + ox, num() + oy); break;
+            case 'S': {
+              var rx = /[Cc Ss]/.test(lastCmd) ? 2 * x - px : x;
+              var ry = /[Cc Ss]/.test(lastCmd) ? 2 * y - py : y;
+              cubic(rx, ry, num() + ox, num() + oy, num() + ox, num() + oy);
+              break;
+            }
+            case 'Q': quad(num() + ox, num() + oy, num() + ox, num() + oy); break;
+            case 'T': {
+              var tx = /[QqTt]/.test(lastCmd) ? 2 * x - qx : x;
+              var ty = /[QqTt]/.test(lastCmd) ? 2 * y - qy : y;
+              quad(tx, ty, num() + ox, num() + oy);
+              break;
+            }
+            case 'Z': x = sx; y = sy; push(x, y); break;
+            default: i++; break;
+          }
+          lastCmd = cmd;
+        }
+        return pts;
+      }
+
+      /** KanjiVG の SVG テキストから {d, type} の配列を取り出す（DOM 不要） */
+      function extractKanjiVgStrokes(svgText) {
+        var out = [];
+        var re = /<path\b[^>]*>/g;
+        var tag;
+        while ((tag = re.exec(svgText)) !== null) {
+          var s = tag[0];
+          var dm = s.match(/\sd\s*=\s*"([^"]*)"/);
+          if (!dm) continue;
+          var tm = s.match(/kvg:type\s*=\s*"([^"]*)"/);
+          out.push({ d: dm[1], type: tm ? tm[1] : '' });
+        }
+        return out;
+      }
+
+      /** KanjiVG の SVG テキスト → 判定用の手本モデル */
+      function modelFromKanjiVg(svgText, viewBoxSize) {
+        var size = viewBoxSize || 109;
+        var raw = extractKanjiVgStrokes(svgText);
+        return buildModel(raw.map(function (s) {
+          return {
+            type: s.type,
+            points: parsePath(s.d).map(function (p) { return { x: p.x / size, y: p.y / size }; }),
+          };
+        }));
+      }
+
+      return {
+        CONFIG: CONFIG,
+        judge: judge,
+        buildModel: buildModel,
+        buildModelStroke: buildModelStroke,
+        modelFromKanjiVg: modelFromKanjiVg,
+        extractKanjiVgStrokes: extractKanjiVgStrokes,
+        parsePath: parsePath,
+        // 以下は検証・デバッグ用
+        _internal: {
+          resample: resample, pathLength: pathLength, strokeRelation: strokeRelation,
+          detectHook: detectHook, detectEnding: detectEnding, expectedEnding: expectedEnding,
+          similarityAlign: similarityAlign, hungarian: hungarian, mergeOversplit: mergeOversplit,
+          meanPointDistance: meanPointDistance,
+        },
+      };
+    })();
+
+    // ==== KANJI_JUDGE_ENGINE_END ====
+
     // ==========================================
-    // 漢字の正誤判定エンジン（KanjiVG ベクターデータ方式）
-    // 「マイ漢字タウン」のストローク採点ロジックを移植。
-    // 画数・交差パターン・始点・終点・書き順を幾何的に照合し、
-    // 画数だけ合っていて形が違うものを正しく不正解にする。
+    // KanjiVG 手本データの取得（メモリ → localStorage → ネットワーク）
+    // 取り出した d 属性と kvg:type を KanjiJudge に渡して手本モデルを組み立てる。
+    // SVG の解析は KanjiJudge 側の純粋関数で行うため、ここは通信とキャッシュだけを担う。
     // ==========================================
     const KANJI_VG = {
       CDN_URL: 'https://cdn.jsdelivr.net/gh/KanjiVG/kanjivg@master/kanji',
       FETCH_TIMEOUT: 6000,
       MAX_RETRIES: 3,
-      VIEWBOX_SIZE: 109,   // KanjiVG の SVG は 109x109
-      SAMPLE_INTERVAL: 2,  // パス上のサンプリング間隔
+      VIEWBOX_SIZE: 109, // KanjiVG の SVG は 109x109
+      // kvg:type も保存するようになったため、旧形式（d 文字列のみ）と鍵を分ける
+      CACHE_PREFIX: 'kvg2_',
     };
 
-    // 判定しきい値（正規化座標 0-1）
-    const STROKE_THRESHOLDS = {
-      START_POINT: 0.20,    // 始点の許容距離
-      END_POINT: 0.25,      // 終点の許容距離
-      ORDER_DISTANCE: 0.3,  // 書き順マッチングの許容距離
-      CROSS_COUNT_MIN: 3,   // これ未満の交差は点接触として無視
-    };
-
-    // 採点の重み（合計100点）
-    const GRADE_WEIGHTS = { START: 35, END: 35, ORDER: 30 };
-
-    // KanjiVG データのメモリキャッシュ（hex -> path d 文字列の配列）
-    const vgMemoryCache = new Map();
+    /** 組み立て済みの手本モデル（char -> model）。同じ字を何度も解析しない。 */
+    const vgModelCache = new Map();
 
     const vgHex = (char) => char.codePointAt(0).toString(16).padStart(5, '0');
 
@@ -347,157 +1208,42 @@
       throw lastError;
     };
 
-    // SVG テキストから path 要素の d 属性を抽出（KanjiVG は各画が1つの path）
-    const vgExtractPaths = (svgText) => {
-      const doc = new DOMParser().parseFromString(svgText, 'image/svg+xml');
-      return Array.from(doc.querySelectorAll('path'))
-        .map(p => p.getAttribute('d'))
-        .filter(Boolean);
-    };
+    /** {d, type} の配列から採点用の手本モデルを作る */
+    const vgBuildModel = (strokes) => KanjiJudge.buildModel(strokes.map(s => ({
+      type: s.type,
+      points: KanjiJudge.parsePath(s.d).map(p => ({
+        x: p.x / KANJI_VG.VIEWBOX_SIZE,
+        y: p.y / KANJI_VG.VIEWBOX_SIZE,
+      })),
+    })));
 
-    // path d 文字列の配列 → 各画のサンプリング済み正規化座標に変換
-    const vgBuildStrokeData = (pathStrings) => {
-      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      svg.appendChild(pathEl);
-      svg.setAttribute('width', '0');
-      svg.setAttribute('height', '0');
-      svg.style.position = 'absolute';
-      svg.style.left = '-9999px';
-      document.body.appendChild(svg);
-      try {
-        return pathStrings.map(d => {
-          pathEl.setAttribute('d', d);
-          const len = pathEl.getTotalLength();
-          const points = [];
-          for (let i = 0; i <= len; i += KANJI_VG.SAMPLE_INTERVAL) {
-            const pt = pathEl.getPointAtLength(i);
-            points.push({ x: pt.x / KANJI_VG.VIEWBOX_SIZE, y: pt.y / KANJI_VG.VIEWBOX_SIZE });
-          }
-          const endPt = pathEl.getPointAtLength(len);
-          points.push({ x: endPt.x / KANJI_VG.VIEWBOX_SIZE, y: endPt.y / KANJI_VG.VIEWBOX_SIZE });
-          const startPt = pathEl.getPointAtLength(0);
-          return {
-            s: { x: startPt.x / KANJI_VG.VIEWBOX_SIZE, y: startPt.y / KANJI_VG.VIEWBOX_SIZE },
-            e: { x: endPt.x / KANJI_VG.VIEWBOX_SIZE, y: endPt.y / KANJI_VG.VIEWBOX_SIZE },
-            points,
-          };
-        });
-      } finally {
-        document.body.removeChild(svg);
-      }
-    };
+    /** 漢字 1 文字の手本モデルを取得する */
+    const fetchKanjiModel = async (char) => {
+      if (vgModelCache.has(char)) return vgModelCache.get(char);
 
-    // 漢字1文字の KanjiVG ストロークデータを取得（メモリ→localStorage→ネットワーク）
-    const fetchKanjiVg = async (char) => {
       const hex = vgHex(char);
-      if (vgMemoryCache.has(hex)) {
-        return vgBuildStrokeData(vgMemoryCache.get(hex));
-      }
+      let strokes = null;
       try {
-        const cached = localStorage.getItem('kvg_' + hex);
-        if (cached) {
-          const arr = JSON.parse(cached);
-          vgMemoryCache.set(hex, arr);
-          return vgBuildStrokeData(arr);
-        }
+        const cached = localStorage.getItem(KANJI_VG.CACHE_PREFIX + hex);
+        if (cached) strokes = JSON.parse(cached);
       } catch (e) { /* キャッシュ読み込み失敗は無視 */ }
-      const res = await vgFetchWithRetry(
-        KANJI_VG.CDN_URL + '/' + hex + '.svg',
-        KANJI_VG.MAX_RETRIES,
-        KANJI_VG.FETCH_TIMEOUT
-      );
-      const text = await res.text();
-      const pathStrings = vgExtractPaths(text);
-      vgMemoryCache.set(hex, pathStrings);
-      try { localStorage.setItem('kvg_' + hex, JSON.stringify(pathStrings)); } catch (e) { /* 容量超過は無視 */ }
-      return vgBuildStrokeData(pathStrings);
-    };
 
-    // 2線分が交差するか（外積の符号で判定）
-    const vgIsIntersecting = (p1, p2, p3, p4) => {
-      const crossA = (p3.x - p4.x) * (p1.y - p3.y) + (p3.y - p4.y) * (p3.x - p1.x);
-      const crossB = (p3.x - p4.x) * (p2.y - p3.y) + (p3.y - p4.y) * (p3.x - p2.x);
-      const crossC = (p1.x - p2.x) * (p3.y - p1.y) + (p1.y - p2.y) * (p1.x - p3.x);
-      const crossD = (p1.x - p2.x) * (p4.y - p1.y) + (p1.y - p2.y) * (p1.x - p4.x);
-      return crossC * crossD < 0 && crossA * crossB < 0;
-    };
-
-    // 2つの画の交差セグメント対の数（点接触と明確な突き抜けを区別するため）
-    const vgCountCrossings = (s1, s2) => {
-      if (!s1 || !s2 || s1.length < 2 || s2.length < 2) return 0;
-      let count = 0;
-      for (let i = 0; i < s1.length - 1; i++) {
-        for (let j = 0; j < s2.length - 1; j++) {
-          if (vgIsIntersecting(s1[i], s1[i + 1], s2[j], s2[j + 1])) count++;
-        }
-      }
-      return count;
-    };
-
-    // 2点間の距離スコア（0-1、1が完璧）
-    const vgDistanceScore = (u, t, threshold) =>
-      Math.max(0, 1 - Math.hypot(u.x - t.x, u.y - t.y) / threshold);
-
-    // ユーザーの手書きストロークを KanjiVG データと照合して 0-100 で採点
-    // userStrokes: [[{x,y}, ...], ...]（キャンバス座標）/ strokeData: KanjiVG 正規化データ
-    const gradeStrokes = (userStrokes, strokeData, canvasSize) => {
-      const expectedCount = strokeData.length;
-      const actualCount = userStrokes.length;
-
-      // ── 画数チェック（不一致は即0点）──
-      if (actualCount !== expectedCount) {
-        return { total: 0, strokeCountMatch: false, crossMatch: false, reason: 'stroke', expectedCount };
+      if (!strokes || !strokes.length) {
+        const res = await vgFetchWithRetry(
+          KANJI_VG.CDN_URL + '/' + hex + '.svg',
+          KANJI_VG.MAX_RETRIES,
+          KANJI_VG.FETCH_TIMEOUT
+        );
+        strokes = KanjiJudge.extractKanjiVgStrokes(await res.text());
+        if (!strokes.length) throw new Error('KanjiVG のパスを取得できませんでした');
+        try {
+          localStorage.setItem(KANJI_VG.CACHE_PREFIX + hex, JSON.stringify(strokes));
+        } catch (e) { /* 容量超過は無視 */ }
       }
 
-      const normUser = userStrokes.map(s => s.map(p => ({ x: p.x / canvasSize, y: p.y / canvasSize })));
-
-      // ── 交差パターンチェック（不一致は即0点）──
-      for (let i = 0; i < expectedCount; i++) {
-        for (let j = i + 1; j < expectedCount; j++) {
-          const expectedCrossed = vgCountCrossings(strokeData[i].points, strokeData[j].points) >= STROKE_THRESHOLDS.CROSS_COUNT_MIN;
-          const actualCrossed = vgCountCrossings(normUser[i], normUser[j]) >= STROKE_THRESHOLDS.CROSS_COUNT_MIN;
-          if (expectedCrossed !== actualCrossed) {
-            return { total: 0, strokeCountMatch: true, crossMatch: false, reason: 'cross', expectedCount };
-          }
-        }
-      }
-
-      // ── 始点精度 ──
-      let startTotal = 0;
-      for (let i = 0; i < expectedCount; i++) {
-        startTotal += vgDistanceScore(normUser[i][0], strokeData[i].s, STROKE_THRESHOLDS.START_POINT);
-      }
-      const startScore = (startTotal / expectedCount) * GRADE_WEIGHTS.START;
-
-      // ── 終点精度 ──
-      let endTotal = 0;
-      for (let i = 0; i < expectedCount; i++) {
-        const u = normUser[i];
-        endTotal += vgDistanceScore(u[u.length - 1], strokeData[i].e, STROKE_THRESHOLDS.END_POINT);
-      }
-      const endScore = (endTotal / expectedCount) * GRADE_WEIGHTS.END;
-
-      // ── 書き順（各画の始点を最も近い正解画にマッチング）──
-      let orderCorrect = 0;
-      const usedTargets = new Set();
-      for (let i = 0; i < expectedCount; i++) {
-        const us = normUser[i][0];
-        let bestIdx = -1, bestDist = Infinity;
-        for (let j = 0; j < expectedCount; j++) {
-          if (usedTargets.has(j)) continue;
-          const d = Math.hypot(us.x - strokeData[j].s.x, us.y - strokeData[j].s.y);
-          if (d < bestDist) { bestDist = d; bestIdx = j; }
-        }
-        if (bestIdx >= 0 && bestDist < STROKE_THRESHOLDS.ORDER_DISTANCE) {
-          usedTargets.add(bestIdx);
-          if (bestIdx === i) orderCorrect++;
-        }
-      }
-      const orderScore = (orderCorrect / expectedCount) * GRADE_WEIGHTS.ORDER;
-
-      const total = Math.round(startScore + endScore + orderScore);
-      return { total, strokeCountMatch: true, crossMatch: true, reason: null, expectedCount };
+      const model = vgBuildModel(strokes);
+      vgModelCache.set(char, model);
+      return model;
     };
 
     const GradeBox = ({ grade, onClick }) => {
@@ -569,6 +1315,8 @@
       const currentPathRef = useRef([]);
       // 現在の問題の KanjiVG ストロークデータ（{ char, data }）
       const strokeDataRef = useRef({ char: null, data: null });
+      // 直前の判定で指摘した画（練習モードでお手本を色分けするために持ち越す）
+      const practiceHighlightRef = useRef([]);
 
       const addScoreToLocal = (points = 1) => {
         const currentScore = parseInt(localStorage.getItem('gogo_drill_score') || '0', 10);
@@ -608,8 +1356,9 @@
         setUserInput('');
         pathsRef.current = [];
         currentPathRef.current = [];
+        practiceHighlightRef.current = [];
         setHasMistaked(false);
-        
+
         if (currentIndex + 1 < questions.length) {
           setCurrentIndex(i => i + 1);
           setGameState(nextState);
@@ -733,7 +1482,7 @@
         }
       }, [gameState, currentIndex, questions]);
 
-      // 現在の問題（と次の問題）の KanjiVG データを先読みして、判定を即時化する
+      // 現在の問題（と次の問題）の手本モデルを先読みして、判定を即時化する
       useEffect(() => {
         if (gameState !== 'WRITE' && gameState !== 'PRACTICE') return;
         const q = questions[currentIndex];
@@ -741,17 +1490,17 @@
 
         let cancelled = false;
         strokeDataRef.current = { char: q.k, data: null };
-        fetchKanjiVg(q.k)
-          .then(data => {
+        fetchKanjiModel(q.k)
+          .then(model => {
             if (!cancelled && strokeDataRef.current.char === q.k) {
-              strokeDataRef.current = { char: q.k, data };
+              strokeDataRef.current = { char: q.k, data: model };
             }
           })
           .catch(() => { /* 失敗時はピクセル方式にフォールバック */ });
 
         // 次の問題を先読み（結果は破棄、キャッシュに乗せるだけ）
         const next = questions[currentIndex + 1];
-        if (next) fetchKanjiVg(next.k).catch(() => {});
+        if (next) fetchKanjiModel(next.k).catch(() => {});
 
         return () => { cancelled = true; };
       }, [gameState, currentIndex, questions]);
@@ -785,11 +1534,8 @@
         bgCtx.restore();
 
         if (currentState === 'PRACTICE') {
-          bgCtx.font = `340px "UD デジタル 教科書体 N-B", "UD Digi Kyokasho N-B", "Klee One", serif`;
-          bgCtx.textAlign = 'center';
-          bgCtx.textBaseline = 'middle';
-          bgCtx.fillStyle = 'rgba(61, 64, 91, 0.1)'; 
-          bgCtx.fillText(questions[currentIndex].k, bgCanvas.width / 2, bgCanvas.height / 2);
+          // 直前の判定でつまずいた画を、練習中もお手本の上で目立たせておく
+          paintModel(practiceHighlightRef.current);
         }
       };
 
@@ -809,8 +1555,9 @@
       const startDrawing = (e) => {
         setIsDrawing(true);
         const { x, y } = getCoordinates(e);
-        currentPathRef.current = [{ x, y }];
-        
+        // t（書いた時刻）は「とめ・はらい」を筆の速さから見分けるために記録する
+        currentPathRef.current = [{ x, y, t: performance.now() }];
+
         const ctx = drawCanvasRef.current.getContext('2d');
         ctx.beginPath();
         ctx.moveTo(x, y);
@@ -825,8 +1572,8 @@
       const draw = (e) => {
         if (!isDrawing) return;
         const { x, y } = getCoordinates(e);
-        currentPathRef.current.push({ x, y });
-        
+        currentPathRef.current.push({ x, y, t: performance.now() });
+
         const ctx = drawCanvasRef.current.getContext('2d');
         ctx.lineTo(x, y);
         ctx.lineWidth = penSize;
@@ -847,38 +1594,80 @@
 
       const KANJI_FONT = `340px "UD デジタル 教科書体 N-B", "UD Digi Kyokasho N-B", "Klee One", serif`;
 
-      // 採点結果の表示（正解は加点して次へ、不正解はお手本を薄く出して練習へ）
-      const showWriteResult = (earnedPoints, feedbackMark, failMessage) => {
+      // お手本を「1画ずつ」描く。直すべき画は色を変え、書き順の番号も添える。
+      // 文字を1つ描くだけでは「何画目をどう直すか」が伝わらないため。
+      const drawModelStrokes = (ctx, model, size, highlight) => {
+        if (!model || !model.strokes) return false;
+        const marked = new Set(highlight || []);
+        model.strokes.forEach((stroke, i) => {
+          const bad = marked.has(i);
+          ctx.save();
+          ctx.strokeStyle = bad ? 'rgba(224, 122, 95, 0.85)' : 'rgba(61, 64, 91, 0.22)';
+          ctx.lineWidth = bad ? 9 : 7;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.beginPath();
+          stroke.points.forEach((p, j) => {
+            const x = p.x * size, y = p.y * size;
+            if (j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          });
+          ctx.stroke();
+
+          // 書き始めの位置に画の番号を置く
+          const s = stroke.points[0];
+          ctx.beginPath();
+          ctx.fillStyle = bad ? '#E07A5F' : 'rgba(61, 64, 91, 0.35)';
+          ctx.arc(s.x * size, s.y * size, 11, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 14px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(String(i + 1), s.x * size, s.y * size);
+          ctx.restore();
+        });
+        return true;
+      };
+
+      // お手本を背景に出す。手本モデルがあれば画ごとに、無ければ文字を薄く描く。
+      const paintModel = (highlight) => {
+        const bgCanvas = bgCanvasRef.current;
+        if (!bgCanvas) return;
+        const bgCtx = bgCanvas.getContext('2d');
+        const model = strokeDataRef.current.char === questions[currentIndex].k
+          ? strokeDataRef.current.data : null;
+        if (drawModelStrokes(bgCtx, model, bgCanvas.width, highlight)) return;
+        bgCtx.font = KANJI_FONT;
+        bgCtx.textAlign = 'center';
+        bgCtx.textBaseline = 'middle';
+        bgCtx.fillStyle = highlight ? 'rgba(224, 122, 95, 0.3)' : 'rgba(61, 64, 91, 0.1)';
+        bgCtx.fillText(questions[currentIndex].k, bgCanvas.width / 2, bgCanvas.height / 2);
+      };
+
+      // 採点結果の表示（正解は加点して次へ、不正解はお手本を出して練習へ）
+      const showWriteResult = (earnedPoints, feedbackMark, failMessage, highlight) => {
         if (earnedPoints > 0) {
           setFeedback(feedbackMark);
-          setErrorMessage(`${earnedPoints} てん！`);
+          setErrorMessage(failMessage ? `${earnedPoints} てん！\n${failMessage}` : `${earnedPoints} てん！`);
           if (!hasMistaked) {
             setScore(s => s + earnedPoints);
             addScoreToLocal(earnedPoints);
           }
           setTimeout(() => {
             goToNextQuestion('WRITE');
-          }, 1500);
+          }, earnedPoints >= 3 ? 1500 : 2200);
         } else {
           setFeedback('❌');
           setHasMistaked(true);
           setErrorMessage(failMessage);
-
-          const bgCanvas = bgCanvasRef.current;
-          if (bgCanvas) {
-            const bgCtx = bgCanvas.getContext('2d');
-            bgCtx.font = KANJI_FONT;
-            bgCtx.textAlign = 'center';
-            bgCtx.textBaseline = 'middle';
-            bgCtx.fillStyle = 'rgba(224, 122, 95, 0.3)'; // terracotta
-            bgCtx.fillText(questions[currentIndex].k, bgCanvas.width / 2, bgCanvas.height / 2);
-          }
+          practiceHighlightRef.current = highlight || [];
+          paintModel(practiceHighlightRef.current);
 
           setTimeout(() => {
             setFeedback(null);
             setErrorMessage('');
             setGameState('PRACTICE');
-          }, 2500);
+          }, 3000);
         }
       };
 
@@ -988,41 +1777,40 @@
           return;
         }
 
-        // KanjiVG データ（先読み済みなら即時、未取得なら待つ）
-        let strokeData = strokeDataRef.current.char === targetChar ? strokeDataRef.current.data : null;
-        if (!strokeData) {
+        // 手本モデル（先読み済みなら即時、未取得なら待つ）
+        let model = strokeDataRef.current.char === targetChar ? strokeDataRef.current.data : null;
+        if (!model) {
           setIsJudging(true);
           try {
-            strokeData = await fetchKanjiVg(targetChar);
-            strokeDataRef.current = { char: targetChar, data: strokeData };
+            model = await fetchKanjiModel(targetChar);
+            strokeDataRef.current = { char: targetChar, data: model };
           } catch (e) {
-            strokeData = null;
+            model = null;
           }
           setIsJudging(false);
         }
 
-        // ── 主判定: KanjiVG ベクターによる幾何照合（始点・終点・交差・書き順）──
-        if (strokeData && strokeData.length > 0) {
-          const result = gradeStrokes(pathsRef.current, strokeData, CANVAS_SIZE);
-          if (!result.strokeCountMatch) {
-            showWriteResult(0, '', `かくすう が ちがうよ！\n(せいかいは ${result.expectedCount} かく)`);
+        // ── 主判定: 字形・配置・書き順・点画の交差・終筆の 5 観点 ──
+        if (model && model.strokes.length > 0) {
+          const result = KanjiJudge.judge(pathsRef.current, model, CANVAS_SIZE);
+          const advice = result.messages.join('\n');
+          if (!result.ok) {
+            showWriteResult(0, '', advice || 'おしい！おてほん を よく 見て かいてみよう。', result.highlight);
             return;
           }
-          if (!result.crossMatch) {
-            showWriteResult(0, '', `かたち が ちがうみたい。\nせん の むき や こうさ に きをつけてね。`);
-            return;
-          }
-          let earnedPoints = 0, feedbackMark = '';
-          if (result.total >= 85) { earnedPoints = 3; feedbackMark = '💮'; }
-          else if (result.total >= 70) { earnedPoints = 2; feedbackMark = '⭕️'; }
-          else if (result.total >= 50) { earnedPoints = 1; feedbackMark = '👌'; }
-          showWriteResult(earnedPoints, feedbackMark, `おしい！かたち や いち が ちがうかも。\nおてほん を よく見て かいてみよう。`);
+          const mark = result.points >= 3 ? '💮' : result.points === 2 ? '⭕️' : '👌';
+          // 合格でも、直すとよい点があれば 1 つだけ添える
+          showWriteResult(result.points, mark, result.messages[0] || '', result.highlight);
           return;
         }
 
         // ── フォールバック: ピクセル被覆 + 適合率（オフライン等で KanjiVG 不可時）──
         const pixelResult = gradeByPixels(pathsRef.current, targetChar, targetStrokeCount);
-        showWriteResult(pixelResult.earnedPoints, pixelResult.feedbackMark, pixelResult.failMessage);
+        showWriteResult(
+          pixelResult.earnedPoints,
+          pixelResult.feedbackMark,
+          pixelResult.earnedPoints > 0 ? '' : pixelResult.failMessage
+        );
       };
 
       const displayUnitName = selectedUnits.length === 1 
