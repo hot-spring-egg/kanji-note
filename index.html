@@ -370,7 +370,8 @@
       /** kvg:type のうち払いで終わる画（撇・捺・提の系統） */
       var SWEEP_TYPES = '㇒㇓㇏㇇㇋㇀㇊㇙'; // ㇒㇓㇏㇇㇋㇀㇊㇙
 
-      var ENDING_LABEL = { tome: 'とめ', hane: 'はね', harai: 'はらい' };
+      // 指摘は「おわりは はね だよ」より「はねる」の方が、何をすればよいかがすぐ分かる
+      var ENDING_VERB = { tome: 'とめる', hane: 'はねる', harai: 'はらう' };
 
       // ============================================================
       // 幾何の基本
@@ -778,10 +779,10 @@
       // ============================================================
       // 本体
       // ============================================================
-      var ORDINAL = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+      // お手本に添える画の番号は算用数字で描いているので、指摘の文もそれに合わせる。
+      // 「三かくめ」と書かれても、児童は画面の ③ と結びつけられない。
       function nth(i) {
-        var n = i + 1;
-        return (n <= 10 ? ORDINAL[n - 1] : String(n)) + 'かくめ'; // 「三かくめ」
+        return String(i + 1) + 'かくめ'; // 「3かくめ」
       }
 
       /**
@@ -869,7 +870,7 @@
             reversedCount++;
             issues.push({
               kind: 'direction', severity: 2, model: mi,
-              message: nth(mi) + 'の かきはじめる ところが ぎゃくだよ',
+              message: nth(mi) + 'は ぎゃくむき',
             });
           }
 
@@ -887,7 +888,7 @@
               if (sc <= 0.25 && !res.reversed) {
                 issues.push({
                   kind: 'ending', severity: sc === 0 ? 2 : 1, model: mi,
-                  message: nth(mi) + 'の おわりは「' + ENDING_LABEL[ms2.ending] + '」だよ',
+                  message: nth(mi) + 'は ' + ENDING_VERB[ms2.ending],
                 });
               }
             }
@@ -902,7 +903,7 @@
           if (sr.modelIndex >= 0 && !sr.inOrder) {
             issues.push({
               kind: 'order', severity: 2, model: sr.modelIndex,
-              message: (sr.userIndex + 1) + '番めに かいた せんは 、ほんとうは ' + nth(sr.modelIndex) + ' だよ',
+              message: 'かきじゅんが ちがうよ',
             });
           }
         }
@@ -956,7 +957,7 @@
           if (missing.length) {
             issues.unshift({
               kind: 'strokeCount', severity: 2, model: missing[0],
-              message: nth(missing[0]) + 'が たりないよ（せいかいは ' + expected + ' かく）',
+              message: nth(missing[0]) + 'が たりないよ',
             });
             for (var mv = 1; mv < missing.length; mv++) {
               issues.push({ kind: 'strokeCount', severity: 1, model: missing[mv], message: nth(missing[mv]) + 'も たりないよ' });
@@ -964,7 +965,7 @@
           } else {
             issues.unshift({
               kind: 'strokeCount', severity: 2, model: -1,
-              message: 'かくすうが ちがうよ！（せいかいは ' + expected + ' かく、かいたのは ' + normalized.length + ' かく）',
+              message: 'かくすうは ' + expected + ' かくだよ',
             });
           }
           total = Math.min(total, 40);
@@ -990,7 +991,6 @@
           issues: issues,
           strokes: strokeResults,
           align: align,
-          highlight: highlightList(issues),
           messages: topMessages(issues),
         };
       }
@@ -1001,28 +1001,16 @@
         return Math.min(fwd, rev);
       }
 
+      // 2 画のどちらを直せばよいかだけ伝える。番号を 2 つ並べると読むのに手間がかかる。
       function crossMessage(i, j, expectedKind, actualKind) {
-        var a = nth(i), b = nth(j);
-        if (expectedKind === 'cross') {
-          return actualKind === 'apart'
-            ? a + 'と ' + b + 'は こうさ させて かこう'
-            : b + 'は ' + a + 'を つきぬけるよ';
-        }
-        if (actualKind === 'cross') return b + 'は ' + a + 'から つき出さないよ';
-        if (expectedKind === 'touch') return a + 'と ' + b + 'は くっつけよう';
-        return a + 'と ' + b + 'は はなして かこう';
+        var b = nth(j);
+        if (expectedKind === 'cross') return b + 'は つきぬけるよ';
+        if (actualKind === 'cross') return b + 'は つきぬけないよ';
+        if (expectedKind === 'touch') return b + 'は くっつけるよ';
+        return b + 'は はなして かくよ';
       }
 
-      function highlightList(issues) {
-        var set = {};
-        for (var i = 0; i < issues.length; i++) {
-          if (issues[i].model >= 0) set[issues[i].model] = true;
-          if (issues[i].model2 >= 0) set[issues[i].model2] = true;
-        }
-        return Object.keys(set).map(Number).sort(function (a, b) { return a - b; });
-      }
-
-      /** 児童に見せるのは重い順に最大 3 件まで */
+      /** 重い順に並べて返す。画面に出すのは先頭 1 件だけ（読み切れる量に絞るため） */
       function topMessages(issues, limit) {
         var order = { strokeCount: 0, order: 1, cross: 2, direction: 3, ending: 4 };
         return issues
@@ -1042,7 +1030,7 @@
           scores: { shape: 0, placement: 0, order: 0, cross: 0, ending: 0 },
           maxScores: CONFIG.WEIGHTS,
           strokeCount: { expected: expected, actual: actual, match: false, repaired: false },
-          criticals: ['empty'], issues: [], strokes: [], align: null, highlight: [],
+          criticals: ['empty'], issues: [], strokes: [], align: null,
           messages: ['かいていないよ！'],
         };
       }
@@ -1315,8 +1303,6 @@
       const currentPathRef = useRef([]);
       // 現在の問題の KanjiVG ストロークデータ（{ char, data }）
       const strokeDataRef = useRef({ char: null, data: null });
-      // 直前の判定で指摘した画（練習モードでお手本を色分けするために持ち越す）
-      const practiceHighlightRef = useRef([]);
 
       const addScoreToLocal = (points = 1) => {
         const currentScore = parseInt(localStorage.getItem('gogo_drill_score') || '0', 10);
@@ -1356,7 +1342,6 @@
         setUserInput('');
         pathsRef.current = [];
         currentPathRef.current = [];
-        practiceHighlightRef.current = [];
         setHasMistaked(false);
 
         if (currentIndex + 1 < questions.length) {
@@ -1421,11 +1406,11 @@
             </p>
             {feedback && gameState === 'READ' && (
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-50">
-                <span className={`text-[7rem] sm:text-[9rem] drop-shadow-md opacity-90 leading-none ${feedback === '⭕️' ? 'text-sage' : 'text-terracotta'}`}>
+                <span className={`${errorMessage ? 'text-[5rem] sm:text-[6rem]' : 'text-[7rem] sm:text-[9rem]'} drop-shadow-md opacity-90 leading-none ${feedback === '⭕️' ? 'text-sage' : 'text-terracotta'}`}>
                   {feedback}
                 </span>
                 {errorMessage && (
-                  <div className={`mt-2 bg-white/95 px-4 py-2 rounded-xl border-4 font-rounded text-sm sm:text-base text-center whitespace-pre-wrap shadow-lg ${feedback === '❌' ? 'border-terracotta text-terracotta' : 'border-sage text-sage'}`}>
+                  <div className={`mt-2 bg-white/95 px-5 py-3 rounded-xl border-4 font-rounded font-bold text-2xl sm:text-3xl leading-relaxed text-center whitespace-pre-wrap shadow-lg ${feedback === '❌' ? 'border-terracotta text-terracotta' : 'border-sage text-sage'}`}>
                     {errorMessage}
                   </div>
                 )}
@@ -1453,12 +1438,12 @@
         } else {
           setFeedback('❌');
           setHasMistaked(true); 
-          setErrorMessage(`せいかいは「${currentQ.y}」だよ！`);
+          setErrorMessage(`せいかいは「${currentQ.y}」`);
           setTimeout(() => {
             setFeedback(null);
             setErrorMessage('');
             setUserInput('');
-          }, 2500);
+          }, 4000);
         }
       };
 
@@ -1494,6 +1479,8 @@
           .then(model => {
             if (!cancelled && strokeDataRef.current.char === q.k) {
               strokeDataRef.current = { char: q.k, data: model };
+              // 練習中に手本が届いたら、その場で描き直す（届く前は薄い文字だけなので）
+              if (gameState === 'PRACTICE') paintModel(pathsRef.current.length);
             }
           })
           .catch(() => { /* 失敗時はピクセル方式にフォールバック */ });
@@ -1505,23 +1492,19 @@
         return () => { cancelled = true; };
       }, [gameState, currentIndex, questions]);
 
-      const clearCanvas = (currentState) => {
-        pathsRef.current = [];
-        currentPathRef.current = [];
-        
-        const drawCanvas = drawCanvasRef.current;
-        const drawCtx = drawCanvas.getContext('2d');
-        drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
-        
+      // 白地と十字のガイド線だけを描く。お手本を描き直すたびに毎回ここから始めるので、
+      // 前に赤かった画が下に残らない。
+      const paintCanvasBase = () => {
         const bgCanvas = bgCanvasRef.current;
+        if (!bgCanvas) return null;
         const bgCtx = bgCanvas.getContext('2d', { willReadFrequently: true });
         bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
-        
+
         bgCtx.fillStyle = '#ffffff';
         bgCtx.fillRect(0, 0, bgCanvas.width, bgCanvas.height);
 
         bgCtx.save();
-        bgCtx.strokeStyle = '#81B29A'; 
+        bgCtx.strokeStyle = '#81B29A';
         bgCtx.globalAlpha = 0.5;
         bgCtx.lineWidth = 2;
         bgCtx.setLineDash([8, 8]);
@@ -1532,10 +1515,22 @@
         bgCtx.lineTo(bgCanvas.width, bgCanvas.height / 2);
         bgCtx.stroke();
         bgCtx.restore();
+        return bgCtx;
+      };
+
+      const clearCanvas = (currentState) => {
+        pathsRef.current = [];
+        currentPathRef.current = [];
+
+        const drawCanvas = drawCanvasRef.current;
+        const drawCtx = drawCanvas.getContext('2d');
+        drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+
+        paintCanvasBase();
 
         if (currentState === 'PRACTICE') {
-          // 直前の判定でつまずいた画を、練習中もお手本の上で目立たせておく
-          paintModel(practiceHighlightRef.current);
+          // 書き直しなので、赤は 1画目に戻す
+          paintModel(0);
         }
       };
 
@@ -1589,21 +1584,29 @@
         if (currentPathRef.current.length > 0) {
           pathsRef.current.push([...currentPathRef.current]);
           currentPathRef.current = [];
+          // 練習モードでは、1画 書くごとに「つぎに書く画」の赤を進める
+          if (gameState === 'PRACTICE') paintModel(pathsRef.current.length);
         }
       };
 
       const KANJI_FONT = `340px "UD デジタル 教科書体 N-B", "UD Digi Kyokasho N-B", "Klee One", serif`;
 
-      // お手本を「1画ずつ」描く。直すべき画は色を変え、書き順の番号も添える。
-      // 文字を1つ描くだけでは「何画目をどう直すか」が伝わらないため。
-      const drawModelStrokes = (ctx, model, size, highlight) => {
+      // お手本の色分け。書き終わった画も、これから書く画もグレー。
+      // 「つぎに書く1画」だけを赤にして、目で追う先を1つに絞る。
+      const MODEL_GRAY = 'rgba(120, 122, 130, 0.38)';
+      const MODEL_GRAY_BADGE = 'rgba(120, 122, 130, 0.55)';
+      const MODEL_NEXT_RED = 'rgba(214, 40, 40, 0.9)';
+
+      // お手本を「1画ずつ」描く。nextStroke に渡した画だけを赤くし、書き順の番号も添える。
+      // 文字を1つ描くだけでは「つぎに どの線を どう書くか」が伝わらないため。
+      const drawModelStrokes = (ctx, model, size, nextStroke) => {
         if (!model || !model.strokes) return false;
-        const marked = new Set(highlight || []);
+        const next = typeof nextStroke === 'number' ? nextStroke : -1;
         model.strokes.forEach((stroke, i) => {
-          const bad = marked.has(i);
+          const isNext = i === next;
           ctx.save();
-          ctx.strokeStyle = bad ? 'rgba(224, 122, 95, 0.85)' : 'rgba(61, 64, 91, 0.22)';
-          ctx.lineWidth = bad ? 9 : 7;
+          ctx.strokeStyle = isNext ? MODEL_NEXT_RED : MODEL_GRAY;
+          ctx.lineWidth = isNext ? 10 : 7;
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
           ctx.beginPath();
@@ -1616,11 +1619,11 @@
           // 書き始めの位置に画の番号を置く
           const s = stroke.points[0];
           ctx.beginPath();
-          ctx.fillStyle = bad ? '#E07A5F' : 'rgba(61, 64, 91, 0.35)';
-          ctx.arc(s.x * size, s.y * size, 11, 0, Math.PI * 2);
+          ctx.fillStyle = isNext ? MODEL_NEXT_RED : MODEL_GRAY_BADGE;
+          ctx.arc(s.x * size, s.y * size, isNext ? 13 : 11, 0, Math.PI * 2);
           ctx.fill();
           ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 14px sans-serif';
+          ctx.font = `bold ${isNext ? 16 : 14}px sans-serif`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
           ctx.fillText(String(i + 1), s.x * size, s.y * size);
@@ -1630,22 +1633,26 @@
       };
 
       // お手本を背景に出す。手本モデルがあれば画ごとに、無ければ文字を薄く描く。
-      const paintModel = (highlight) => {
+      // nextStroke は「つぎに書く画」の番号（0 始まり）。
+      const paintModel = (nextStroke) => {
         const bgCanvas = bgCanvasRef.current;
-        if (!bgCanvas) return;
-        const bgCtx = bgCanvas.getContext('2d');
+        if (!bgCanvas || !questions[currentIndex]) return;
+        // 赤い画が移っていくので、そのつど下地から描き直す
+        const bgCtx = paintCanvasBase();
+        if (!bgCtx) return;
         const model = strokeDataRef.current.char === questions[currentIndex].k
           ? strokeDataRef.current.data : null;
-        if (drawModelStrokes(bgCtx, model, bgCanvas.width, highlight)) return;
+        if (drawModelStrokes(bgCtx, model, bgCanvas.width, nextStroke)) return;
         bgCtx.font = KANJI_FONT;
         bgCtx.textAlign = 'center';
         bgCtx.textBaseline = 'middle';
-        bgCtx.fillStyle = highlight ? 'rgba(224, 122, 95, 0.3)' : 'rgba(61, 64, 91, 0.1)';
+        bgCtx.fillStyle = 'rgba(61, 64, 91, 0.12)';
         bgCtx.fillText(questions[currentIndex].k, bgCanvas.width / 2, bgCanvas.height / 2);
       };
 
       // 採点結果の表示（正解は加点して次へ、不正解はお手本を出して練習へ）
-      const showWriteResult = (earnedPoints, feedbackMark, failMessage, highlight) => {
+      // 表示時間は「児童が声に出して読み終えられる長さ」を目安にとる。
+      const showWriteResult = (earnedPoints, feedbackMark, failMessage) => {
         if (earnedPoints > 0) {
           setFeedback(feedbackMark);
           setErrorMessage(failMessage ? `${earnedPoints} てん！\n${failMessage}` : `${earnedPoints} てん！`);
@@ -1655,19 +1662,18 @@
           }
           setTimeout(() => {
             goToNextQuestion('WRITE');
-          }, earnedPoints >= 3 ? 1500 : 2200);
+          }, failMessage ? 4000 : 2200);
         } else {
           setFeedback('❌');
           setHasMistaked(true);
           setErrorMessage(failMessage);
-          practiceHighlightRef.current = highlight || [];
-          paintModel(practiceHighlightRef.current);
+          paintModel(0);
 
           setTimeout(() => {
             setFeedback(null);
             setErrorMessage('');
             setGameState('PRACTICE');
-          }, 3000);
+          }, 5000);
         }
       };
 
@@ -1678,7 +1684,7 @@
         const height = CANVAS_SIZE;
 
         if (paths.length !== targetStrokeCount) {
-          return { earnedPoints: 0, feedbackMark: '', failMessage: `かくすう が ちがうよ！\n(せいかいは ${targetStrokeCount} かく)` };
+          return { earnedPoints: 0, feedbackMark: '', failMessage: `かくすうは ${targetStrokeCount} かくだよ` };
         }
 
         const targetCanvas = document.createElement('canvas');
@@ -1748,7 +1754,7 @@
         else if (f1 >= t2) { earnedPoints = 2; feedbackMark = '⭕️'; }
         else if (f1 >= t1) { earnedPoints = 1; feedbackMark = '👌'; }
 
-        return { earnedPoints, feedbackMark, failMessage: `おしい！かたち や いち が ちがうかも。\nじゅうじの せん に あわせて かいてみよう。` };
+        return { earnedPoints, feedbackMark, failMessage: `まんなかの せんに あわせて かこう` };
       };
 
       const checkWriting = async () => {
@@ -1773,7 +1779,7 @@
           }
         });
         if (totalPathLength < Math.max(100, targetStrokeCount * 25)) {
-          showWriteResult(0, '', `せん が みじかすぎるよ！\nしっかり かこう。`);
+          showWriteResult(0, '', `せんが みじかすぎるよ`);
           return;
         }
 
@@ -1793,14 +1799,15 @@
         // ── 主判定: 字形・配置・書き順・点画の交差・終筆の 5 観点 ──
         if (model && model.strokes.length > 0) {
           const result = KanjiJudge.judge(pathsRef.current, model, CANVAS_SIZE);
-          const advice = result.messages.join('\n');
+          // 指摘は「いちばん 直したいこと」1 つだけにする。
+          // 短い表示時間に 3 つ並べても児童は読みきれず、結局どれも伝わらない。
           if (!result.ok) {
-            showWriteResult(0, '', advice || 'おしい！おてほん を よく 見て かいてみよう。', result.highlight);
+            showWriteResult(0, '', result.messages[0] || 'おてほんを よく 見てね');
             return;
           }
           const mark = result.points >= 3 ? '💮' : result.points === 2 ? '⭕️' : '👌';
           // 合格でも、直すとよい点があれば 1 つだけ添える
-          showWriteResult(result.points, mark, result.messages[0] || '', result.highlight);
+          showWriteResult(result.points, mark, result.messages[0] || '');
           return;
         }
 
@@ -2085,12 +2092,12 @@
                       />
                       
                       {feedback && gameState === 'WRITE' && (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-50">
-                          <span className={`text-[7rem] sm:text-[9rem] drop-shadow-md opacity-90 leading-none ${feedback === '❌' ? 'text-terracotta' : 'text-sage'}`}>
+                        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-50 px-2">
+                          <span className={`${errorMessage ? 'text-[4.5rem] sm:text-[5.5rem]' : 'text-[7rem] sm:text-[9rem]'} drop-shadow-md opacity-90 leading-none ${feedback === '❌' ? 'text-terracotta' : 'text-sage'}`}>
                             {feedback}
                           </span>
                           {errorMessage && (
-                            <div className={`mt-2 bg-white/95 px-4 py-2 rounded-xl border-4 font-rounded text-sm sm:text-base text-center whitespace-pre-wrap shadow-lg ${feedback === '❌' ? 'border-terracotta text-terracotta' : 'border-sage text-sage'}`}>
+                            <div className={`mt-2 bg-white/95 px-5 py-3 rounded-xl border-4 font-rounded font-bold text-xl sm:text-3xl leading-relaxed text-center whitespace-pre-wrap shadow-lg ${feedback === '❌' ? 'border-terracotta text-terracotta' : 'border-sage text-sage'}`}>
                               {errorMessage}
                             </div>
                           )}
