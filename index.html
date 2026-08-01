@@ -1294,6 +1294,8 @@
       
       const [hasMistaked, setHasMistaked] = useState(false);
       const [isJudging, setIsJudging] = useState(false);
+      // 判定結果を見せている間に出すボタンの文字。null のときは待ちがない（＝ボタンを出さない）。
+      const [skipLabel, setSkipLabel] = useState(null);
 
       const bgCanvasRef = useRef(null);
       const drawCanvasRef = useRef(null);
@@ -1301,8 +1303,58 @@
 
       const pathsRef = useRef([]);
       const currentPathRef = useRef([]);
+      // 判定結果の表示が終わったあとに実行する処理と、そのタイマー
+      const advanceTimerRef = useRef(null);
+      const advanceActionRef = useRef(null);
+      const skipButtonTimerRef = useRef(null);
       // 現在の問題の KanjiVG ストロークデータ（{ char, data }）
       const strokeDataRef = useRef({ char: null, data: null });
+
+      // 判定結果は児童が読み切れるまで表示するが、読み終わった子を待たせないための仕組み。
+
+      // ボタンは「できた！」「けってい」と同じ位置に出る。すぐ出すと連打でうっかり
+      // 飛ばしてしまうので、少しだけ遅らせてから出す。
+      const SKIP_BUTTON_DELAY = 700;
+
+      // 待ちを取り消す（画面を離れるときや、次の問題を始めるとき）
+      const cancelAdvance = () => {
+        if (advanceTimerRef.current) {
+          clearTimeout(advanceTimerRef.current);
+          advanceTimerRef.current = null;
+        }
+        if (skipButtonTimerRef.current) {
+          clearTimeout(skipButtonTimerRef.current);
+          skipButtonTimerRef.current = null;
+        }
+        advanceActionRef.current = null;
+        setSkipLabel(null);
+      };
+
+      // delay ミリ秒後に action を実行する。それまでは label のボタンを出し、押されたら即実行する。
+      const scheduleAdvance = (delay, label, action) => {
+        cancelAdvance();
+        advanceActionRef.current = action;
+        skipButtonTimerRef.current = setTimeout(() => {
+          skipButtonTimerRef.current = null;
+          setSkipLabel(label);
+        }, Math.min(SKIP_BUTTON_DELAY, delay / 2));
+        advanceTimerRef.current = setTimeout(() => {
+          advanceTimerRef.current = null;
+          advanceActionRef.current = null;
+          setSkipLabel(null);
+          action();
+        }, delay);
+      };
+
+      // ボタンが押されたとき：タイマーを止めて、待たずに先へ進む
+      const skipWait = () => {
+        const action = advanceActionRef.current;
+        cancelAdvance();
+        if (action) action();
+      };
+
+      // 画面から離れてもタイマーが残らないようにする
+      useEffect(() => cancelAdvance, []);
 
       const addScoreToLocal = (points = 1) => {
         const currentScore = parseInt(localStorage.getItem('gogo_drill_score') || '0', 10);
@@ -1334,9 +1386,11 @@
         setUserInput('');
         pathsRef.current = [];
         currentPathRef.current = [];
+        cancelAdvance();
       };
 
       const goToNextQuestion = (nextState) => {
+        cancelAdvance();
         setFeedback(null);
         setErrorMessage('');
         setUserInput('');
@@ -1432,18 +1486,18 @@
             setScore(s => s + 1);
             addScoreToLocal(1);
           }
-          setTimeout(() => {
+          scheduleAdvance(1500, 'つぎへ', () => {
             goToNextQuestion('READ');
-          }, 1500);
+          });
         } else {
           setFeedback('❌');
-          setHasMistaked(true); 
+          setHasMistaked(true);
           setErrorMessage(`せいかいは「${currentQ.y}」`);
-          setTimeout(() => {
+          scheduleAdvance(4000, 'もういちど', () => {
             setFeedback(null);
             setErrorMessage('');
             setUserInput('');
-          }, 4000);
+          });
         }
       };
 
@@ -1652,6 +1706,7 @@
 
       // 採点結果の表示（正解は加点して次へ、不正解はお手本を出して練習へ）
       // 表示時間は「児童が声に出して読み終えられる長さ」を目安にとる。
+      // 読み終わった子は、出てくるボタンを押して待たずに進める。
       const showWriteResult = (earnedPoints, feedbackMark, failMessage) => {
         if (earnedPoints > 0) {
           setFeedback(feedbackMark);
@@ -1660,20 +1715,20 @@
             setScore(s => s + earnedPoints);
             addScoreToLocal(earnedPoints);
           }
-          setTimeout(() => {
+          scheduleAdvance(failMessage ? 4000 : 2200, 'つぎへ', () => {
             goToNextQuestion('WRITE');
-          }, failMessage ? 4000 : 2200);
+          });
         } else {
           setFeedback('❌');
           setHasMistaked(true);
           setErrorMessage(failMessage);
           paintModel(0);
 
-          setTimeout(() => {
+          scheduleAdvance(5000, 'れんしゅうへ', () => {
             setFeedback(null);
             setErrorMessage('');
             setGameState('PRACTICE');
-          }, 5000);
+          });
         }
       };
 
@@ -2028,13 +2083,22 @@
                         className="w-full p-3 sm:p-4 rounded-xl border-2 border-gray-300 font-bold text-xl sm:text-2xl text-center focus:outline-none focus:border-sage bg-white"
                         placeholder="ひらがな"
                       />
-                      <button 
-                        onClick={checkReading}
-                        disabled={feedback !== null}
-                        className="bg-sage text-white font-rounded py-3 sm:py-4 px-6 rounded-full shadow-md active:translate-y-1 active:shadow-sm flex items-center justify-center gap-3 text-lg sm:text-xl transition-all"
-                      >
-                        けってい (Enter)
-                      </button>
+                      {skipLabel ? (
+                        <button
+                          onClick={skipWait}
+                          className="bg-bluegrey text-white font-rounded py-3 sm:py-4 px-6 rounded-full shadow-md active:translate-y-1 active:shadow-sm flex items-center justify-center gap-3 text-lg sm:text-xl transition-all"
+                        >
+                          {skipLabel} →
+                        </button>
+                      ) : (
+                        <button
+                          onClick={checkReading}
+                          disabled={feedback !== null}
+                          className="bg-sage text-white font-rounded py-3 sm:py-4 px-6 rounded-full shadow-md active:translate-y-1 active:shadow-sm flex items-center justify-center gap-3 text-lg sm:text-xl transition-all"
+                        >
+                          けってい (Enter)
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
@@ -2114,7 +2178,14 @@
                         {gameState === 'PRACTICE' ? 'もういちど' : 'けす'}
                       </button>
                       
-                      {gameState === 'WRITE' ? (
+                      {skipLabel ? (
+                        <button
+                          onClick={skipWait}
+                          className="bg-bluegrey text-white font-rounded py-3 px-6 sm:px-10 rounded-full shadow-md active:translate-y-1 active:shadow-sm flex items-center gap-2 sm:gap-3 text-base sm:text-xl transition-all"
+                        >
+                          {skipLabel} →
+                        </button>
+                      ) : gameState === 'WRITE' ? (
                         <button
                           onClick={checkWriting}
                           disabled={feedback !== null || isJudging}
