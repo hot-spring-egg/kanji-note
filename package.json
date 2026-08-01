@@ -1,0 +1,9 @@
+{
+  "name": "kanji-note",
+  "private": true,
+  "version": "1.0.0",
+  "description": "カンジノート — 漢字の読み書き練習アプリ（index.html 単体で動作）",
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
+  }
+}
