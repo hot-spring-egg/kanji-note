@@ -115,7 +115,7 @@ test('縦画が横画を突き抜けていない「十」は不合格になる',
   assert.ok(r.messages.some(m => m.includes('つきぬける') || m.includes('こうさ')), r.messages.join('/'));
 });
 
-test('書き順を入れ替えた「十」は不合格になり、何画目かを指摘する', () => {
+test('書き順を入れ替えた「十」は不合格になり、書き順の誤りを指摘する', () => {
   const [yoko, tate] = goodJu();
   const r = K.judge([tate, yoko], model['十'], SIZE);
   assert.ok(!r.ok);
@@ -123,7 +123,7 @@ test('書き順を入れ替えた「十」は不合格になり、何画目か�
   assert.strictEqual(r.scores.order, 0);
   // 形そのものは合っているので、字形は落とさない
   assert.ok(r.scores.shape >= r.maxScores.shape * 0.8, '字形まで巻き添えで下がっている: ' + r.scores.shape);
-  assert.ok(r.messages.some(m => m.includes('ほんとうは')), r.messages.join('/'));
+  assert.ok(r.messages.some(m => m.includes('かきじゅん')), r.messages.join('/'));
 });
 
 test('横画を右から左へ書くと「向きが逆」と指摘される', () => {
@@ -310,4 +310,36 @@ test('全部の手本で、なぞり書きが合格する', () => {
     if (!r.ok) failed.push(`${ch}: ${r.total}点 ${r.messages.join('/')}`);
   }
   assert.deepStrictEqual(failed, []);
+});
+
+// ============================================================
+// 指摘の文
+// ============================================================
+// 数秒しか出ない指摘を児童が読み切れるように、1 行・短文であることを守る。
+// 長い説明文に戻すと、読めないまま消えてしまう。
+test('指摘の文はどれも短い 1 行になっている', () => {
+  const LIMIT = 16;
+  const collected = new Set();
+
+  const [yoko, tate] = goodJu();
+  const cases = [
+    [[tate, yoko], '十'],                        // 書き順
+    [[yoko.slice().reverse(), tate], '十'],       // 向きが逆
+    [[yoko], '十'],                              // 画数不足
+    [strokesFrom([
+      [[px(0.11), px(0.47)], [px(0.88), px(0.43)]],
+      [[px(0.48), px(0.11)], [px(0.49), px(0.45)]],
+    ]), '十'],                                   // 交差
+    [[], '十'],                                  // 未記入
+  ];
+  for (const [strokes, ch] of cases) {
+    K.judge(strokes, model[ch], SIZE).messages.forEach(m => collected.add(m));
+  }
+  for (const ch of Object.keys(RAW)) {
+    K.judge(writeModel(model[ch]).slice(1), model[ch], SIZE).messages.forEach(m => collected.add(m));
+  }
+
+  assert.ok(collected.size > 0, '指摘が 1 つも集まっていない');
+  const tooLong = [...collected].filter(m => m.includes('\n') || m.length > LIMIT);
+  assert.deepStrictEqual(tooLong, [], `${LIMIT} 字を超える指摘: ${tooLong.join('/')}`);
 });
